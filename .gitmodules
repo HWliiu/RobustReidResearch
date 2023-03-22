@@ -1,0 +1,3 @@
+[submodule "pytorch_reid_models"]
+	path = pytorch_reid_models
+	url = https://github.com/HWliiu/pytorch-reid-models
