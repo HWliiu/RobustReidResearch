@@ -2,8 +2,8 @@
 author: Huiwang Liu
 e-mail: liuhuiwang1025@outlook.com
 """
-
 import logging
+import time
 import warnings
 
 import accelerate
@@ -85,6 +85,21 @@ class EvaluateMixin(EvaluateReIDMixin, EvaluateVQEMixin):
     pass
 
 
+def timer(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        time_diff = end_time - start_time
+
+        minutes = int(time_diff // 60)
+        seconds = int(time_diff % 60)
+        spend_time = f"{minutes}m{seconds}s"
+        return result, spend_time
+
+    return wrapper
+
+
 class TransferAttackBase(EvaluateMixin):
     def __init__(
         self,
@@ -121,9 +136,10 @@ class TransferAttackBase(EvaluateMixin):
         logger = logging.getLogger("__main__")
         for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
             agent_model = build_reid_model(self.agent_model_name, dataset_name).cuda()
-            agent_model.eval().requires_grad_(False)
-            adv_q_dataset = self.generate_adv(q_dataset, agent_model)
 
+            adv_q_dataset, spend_time = timer(self.generate_adv)(q_dataset, agent_model)
+
+            logger.info(f"Spend Time: {spend_time}")
             vqe_results = self.evaluate_vqe(q_dataset, adv_q_dataset)
             logger.info(f"VQE Metrics:\t" + vqe_results)
 
@@ -185,7 +201,11 @@ class EnsTransferAttackBase(EvaluateMixin):
                 build_reid_model(agent_model_name, dataset_name).cuda()
                 for agent_model_name in self.agent_model_names
             ]
-            adv_q_dataset = self.generate_adv(q_dataset, agent_models)
+            adv_q_dataset, spend_time = timer(self.generate_adv)(
+                q_dataset, agent_models
+            )
+
+            logger.info(f"Spend Time: {spend_time}")
 
             vqe_results = self.evaluate_vqe(q_dataset, adv_q_dataset)
             logger.info(f"VQE Metrics:\t" + vqe_results)
@@ -230,7 +250,7 @@ class QueryAttackBase(EvaluateMixin):
         )
         self.accelerator = accelerate.Accelerator(mixed_precision="no")
 
-    def generate_adv(self, q_dataset, target_model):
+    def generate_adv(self, q_dataset, target_model, g_dataset):
         raise NotImplementedError
 
     def run(self):
@@ -238,10 +258,13 @@ class QueryAttackBase(EvaluateMixin):
         for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
             for target_model_name in self.target_model_names:
                 target_model = build_reid_model(target_model_name, dataset_name).cuda()
-                target_model.requires_grad_(False)
                 target_model = self.accelerator.prepare(target_model)
 
-                adv_q_dataset = self.generate_adv(q_dataset, target_model)
+                adv_q_dataset, spend_time = timer(self.generate_adv)(
+                    q_dataset, target_model, g_dataset
+                )
+
+                logger.info(f"Spend Time: {spend_time}")
 
                 vqe_results = self.evaluate_vqe(q_dataset, adv_q_dataset)
                 logger.info(f"VQE Metrics:\t" + vqe_results)

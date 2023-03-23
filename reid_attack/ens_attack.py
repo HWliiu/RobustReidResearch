@@ -19,8 +19,8 @@ class EnsTIM:
         self,
         agent_models,
         eps=8 / 255,
-        alpha=2 / 255,
-        steps=10,
+        alpha=1 / 255,
+        steps=50,
         decay=1.0,
         len_kernel=15,
         nsig=3,
@@ -132,7 +132,10 @@ class EnsTIM:
 
 
 class EnsTIMAttack(EnsTransferAttackBase):
-    def generate_adv(self, q_dataset, agent_models, g_dataset=None):
+    def generate_adv(self, q_dataset, agent_models):
+        for model in self.agent_models:
+            model.eval().requires_grad_(False)
+
         attack = EnsTIM(agent_models)
 
         all_adv_imgs, all_pids, all_camids = [], [], []

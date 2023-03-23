@@ -30,7 +30,7 @@ class Bandits:
         fd_eta=0.1,
         exploration=1.0,
         online_lr=100,
-        max_queries=5000,
+        max_queries=4000,
         alpha=0.01,
         downsampling=True,
     ):
@@ -108,7 +108,9 @@ class Bandits:
 
 
 class BanditsAttack(QueryAttackBase):
-    def generate_adv(self, q_dataset, target_model, g_dataset=None):
+    def generate_adv(self, q_dataset, target_model, g_dataset):
+        target_model.eval().requires_grad_(False)
+
         attack = Bandits(target_model)
 
         all_adv_imgs, all_pids, all_camids = [], [], []

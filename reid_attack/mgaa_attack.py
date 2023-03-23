@@ -180,7 +180,10 @@ class MGAATIM:
 
 
 class MGAATIMAttack(EnsTransferAttackBase):
-    def generate_adv(self, q_dataset, agent_models, g_dataset=None):
+    def generate_adv(self, q_dataset, agent_models):
+        for model in self.agent_models:
+            model.eval().requires_grad_(False)
+
         attack = MGAATIM(agent_models)
 
         all_adv_imgs, all_pids, all_camids = [], [], []

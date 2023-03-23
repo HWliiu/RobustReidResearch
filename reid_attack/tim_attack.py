@@ -27,8 +27,8 @@ class TIM:
         self,
         agent_model,
         eps=8 / 255,
-        alpha=2 / 255,
-        steps=10,
+        alpha=1 / 255,
+        steps=50,
         decay=1.0,
         len_kernel=15,
         nsig=3,
@@ -183,7 +183,9 @@ class TIM:
 
 
 class TIMAttack(TransferAttackBase):
-    def generate_adv(self, q_dataset, agent_model, g_dataset=None):
+    def generate_adv(self, q_dataset, agent_model):
+        agent_model.eval().requires_grad_(False)
+
         attack = TIM(agent_model)
 
         all_adv_imgs, all_pids, all_camids = [], [], []

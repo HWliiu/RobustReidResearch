@@ -1,4 +1,4 @@
-# https://github.com/BorealisAI/advertorch
+# Modified from https://github.com/BorealisAI/advertorch
 
 # Copyright (c) 2018-present, Royal Bank of Canada.
 # All rights reserved.

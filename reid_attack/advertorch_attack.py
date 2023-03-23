@@ -22,17 +22,19 @@ class TransferAttack(TransferAttackBase):
         return imgs
 
     def generate_adv(self, q_dataset, agent_model):
+        agent_model.eval().requires_grad_(False)
+
         loss_fn = partial(
             torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device="cuda")
         )
         eps = 8 / 255
         attack = attacks.LinfMomentumIterativeAttack(
-            agent_model, loss_fn, eps=eps, eps_iter=0.01, nb_iter=40
+            agent_model, loss_fn, eps=eps, eps_iter=1 / 255, nb_iter=50
         )
 
         # eps = 9.8
         # attack = attacks.L2MomentumIterativeAttack(
-        #     agent_model, loss_fn, eps=eps, eps_iter=0.98*2, nb_iter=10
+        #     agent_model, loss_fn, eps=eps, eps_iter=9.8 / 8, nb_iter=50
         # )
 
         all_adv_imgs, all_pids, all_camids = [], [], []
@@ -57,23 +59,33 @@ class QueryAttack(QueryAttackBase):
         imgs = torch.clamp(imgs, min=0, max=1).detach()
         return imgs
 
-    def generate_adv(self, q_dataset, target_model):
+    def generate_adv(self, q_dataset, target_model, g_dataset=None):
+        target_model.eval().requires_grad_(False)
+
         loss_fn = partial(
             torch.nn.CosineEmbeddingLoss(reduction="none"),
             target=torch.ones(1, device="cuda"),
         )
         eps = 8 / 255
-        attack = attacks.BanditAttack(
+        # attack = attacks.BanditAttack(
+        #     target_model,
+        #     eps=eps,
+        #     order=torch.inf,
+        #     fd_eta=0.1,
+        #     exploration=1.0,
+        #     online_lr=100,
+        #     loss_fn=loss_fn,
+        #     nb_iter=2500,
+        #     eps_iter=0.01,
+        #     downsampling=True,
+        # )
+        attack = attacks.NESAttack(
             target_model,
-            eps=eps,
-            order=torch.inf,
-            fd_eta=0.1,
-            exploration=1.0,
-            online_lr=100,
             loss_fn=loss_fn,
-            nb_iter=2500,
-            eps_iter=0.01,
-            downsampling=True,
+            eps=eps,
+            nb_samples=250,
+            nb_iter=10,
+            eps_iter=2 / 255,
         )
 
         all_adv_imgs, all_pids, all_camids = [], [], []
