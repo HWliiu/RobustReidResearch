@@ -109,6 +109,7 @@ class TransferAttackBase(EvaluateMixin):
             "bagtricks_R50_fastreid",
             "bagtricks_osnet_x1_0_fastreid",
             "bagtricks_S50_fastreid",
+            "bagtricks_SeR50_fastreid",
             "bagtricks_densenet121_fastreid",
             "bagtricks_mobilenet_v3_large_fastreid",
             "bagtricks_inception_resnet_v2_fastreid",
@@ -131,9 +132,9 @@ class TransferAttackBase(EvaluateMixin):
     ):
         self.agent_model_name = agent_model_name
         self.target_model_names = target_model_names
-        self.test_datasets = build_test_datasets(
-            dataset_names=target_dataset_names, query_num=query_num
-        )
+        self.target_dataset_names = target_dataset_names
+        self.query_num = query_num
+
         # It is only used to evaluate the results, and it will greatly affect the effect during training
         self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
 
@@ -142,7 +143,10 @@ class TransferAttackBase(EvaluateMixin):
 
     def run(self):
         logger = logging.getLogger("__main__")
-        for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
+        test_datasets = build_test_datasets(
+            dataset_names=self.target_dataset_names, query_num=self.query_num
+        )
+        for dataset_name, (q_dataset, g_dataset) in test_datasets.items():
             agent_model = build_reid_model(self.agent_model_name, dataset_name).cuda()
 
             adv_q_dataset, spend_time = timer(self.generate_adv)(q_dataset, agent_model)
@@ -178,6 +182,7 @@ class EnsTransferAttackBase(EvaluateMixin):
             # Backbone
             "bagtricks_R50_fastreid",
             "bagtricks_osnet_x1_0_fastreid",
+            "bagtricks_SeR50_fastreid",
             "bagtricks_S50_fastreid",
             "bagtricks_densenet121_fastreid"
             # SOTA Reid
@@ -198,9 +203,9 @@ class EnsTransferAttackBase(EvaluateMixin):
     ):
         self.agent_model_names = agent_model_names
         self.target_model_names = target_model_names
-        self.test_datasets = build_test_datasets(
-            dataset_names=target_dataset_names, query_num=query_num
-        )
+        self.target_dataset_names = target_dataset_names
+        self.query_num = query_num
+
         # only for evaluation
         self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
 
@@ -209,7 +214,10 @@ class EnsTransferAttackBase(EvaluateMixin):
 
     def run(self):
         logger = logging.getLogger("__main__")
-        for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
+        test_datasets = build_test_datasets(
+            dataset_names=self.target_dataset_names, query_num=self.query_num
+        )
+        for dataset_name, (q_dataset, g_dataset) in test_datasets.items():
             agent_models = [
                 build_reid_model(agent_model_name, dataset_name).cuda()
                 for agent_model_name in self.agent_model_names
@@ -245,6 +253,7 @@ class QueryAttackBase(EvaluateMixin):
             "bagtricks_R50_fastreid",
             "bagtricks_osnet_x1_0_fastreid",
             "bagtricks_S50_fastreid",
+            "bagtricks_SeR50_fastreid",
             "bagtricks_densenet121_fastreid",
             "bagtricks_mobilenet_v3_large_fastreid",
             "bagtricks_inception_resnet_v2_fastreid",
@@ -266,9 +275,9 @@ class QueryAttackBase(EvaluateMixin):
         query_num=100,
     ):
         self.target_model_names = target_model_names
-        self.test_datasets = build_test_datasets(
-            dataset_names=target_dataset_names, query_num=query_num
-        )
+        self.target_dataset_names = target_dataset_names
+        self.query_num = query_num
+
         self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
 
     def generate_adv(self, q_dataset, target_model, g_dataset):
@@ -276,7 +285,10 @@ class QueryAttackBase(EvaluateMixin):
 
     def run(self):
         logger = logging.getLogger("__main__")
-        for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
+        test_datasets = build_test_datasets(
+            dataset_names=self.target_dataset_names, query_num=self.query_num
+        )
+        for dataset_name, (q_dataset, g_dataset) in test_datasets.items():
             for target_model_name in self.target_model_names:
                 target_model = build_reid_model(target_model_name, dataset_name).cuda()
 
