@@ -2,8 +2,6 @@
 author: Huiwang Liu
 e-mail: liuhuiwang1025@outlook.com
 """
-import os
-from pathlib import Path
 
 import accelerate
 import torch
@@ -13,6 +11,7 @@ import torchvision.models as models
 import torchvision.transforms as T
 from kornia.enhance import Normalize
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from nips2017_attack.nips2017_dataset import NIPS2017Dataset
 
@@ -27,15 +26,15 @@ def evaluate(data_loader, model):
         compute_groups=False,
     ).to(device)
 
-    for imgs, labels in data_loader:
+    for imgs, lbls in tqdm(data_loader, desc="Evaluate", leave=False):
         imgs = imgs.to(device)
-        labels = labels.to(device)
+        lbls = lbls.to(device)
 
         with torch.no_grad():
             preds = model(imgs)
             preds = nn.functional.softmax(preds, dim=1)
-            accuracy.update(preds, labels)
-    results = {k: format(v.item(), ".4f") for k, v in accuracy.compute().items()}
+            accuracy.update(preds, lbls)
+    results = {k: v.item() for k, v in accuracy.compute().items()}
     accuracy.reset()
     return list(results.values())
 
@@ -55,7 +54,7 @@ def main():
     data_loader, model = accelerator.prepare(data_loader, model)
 
     top1, top5 = evaluate(data_loader, model)
-    print(f"original top1:{top1} top5:{top5}")
+    print(f"original top1:{top1:.2f} top5:{top5:.2f}")
     torch.cuda.empty_cache()
 
 
