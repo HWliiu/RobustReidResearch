@@ -5,9 +5,8 @@ e-mail: liuhuiwang1025@outlook.com
 
 import logging
 import random
-from pathlib import Path
+from functools import partial
 
-import accelerate
 import kornia as K
 import numpy as np
 import torch
@@ -84,7 +83,9 @@ class TIM:
     #     images = images.detach().to(self.device)
     #     matches = matches.detach().to(self.device)
 
-    #     criterion = torch.nn.CosineEmbeddingLoss()
+    #     criterion = criterion = partial(
+    #     torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+    # )
 
     #     momentum = torch.zeros_like(images).detach().to(self.device)
 
@@ -105,8 +106,7 @@ class TIM:
     #         # Calculate loss
     #         loss = criterion(
     #             repeat(adv_feats, "b d->(b n) d", n=matches_feats.shape[1]),
-    #             rearrange(matches_feats, "b n d->(b n) d"),
-    #             torch.ones(1, device=adv_feats.device),
+    #             rearrange(matches_feats, "b n d->(b n) d")
     #         )
 
     #         # Update adversarial images
@@ -134,7 +134,9 @@ class TIM:
     def forward(self, images):
         images = images.detach().to(self.device)
 
-        criterion = torch.nn.CosineEmbeddingLoss()
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
 
         momentum = torch.zeros_like(images).detach().to(self.device)
 
@@ -153,16 +155,10 @@ class TIM:
             adv_feats = self.agent_model(self.input_diversity(adv_images))
 
             # Calculate loss
-            loss = criterion(
-                adv_feats,
-                feats,
-                torch.ones(1, device=adv_feats.device),
-            )
+            loss = criterion(adv_feats, feats)
 
             # Update adversarial images
-            grad = torch.autograd.grad(
-                loss, adv_images, retain_graph=False, create_graph=False
-            )[0]
+            grad = torch.autograd.grad(loss, adv_images)[0]
 
             # depth wise conv2d
             grad = K.filters.gaussian_blur2d(

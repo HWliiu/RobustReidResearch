@@ -3,6 +3,8 @@ author: Huiwang Liu
 e-mail: liuhuiwang1025@outlook.com
 """
 
+from functools import partial
+
 import kornia as K
 import numpy as np
 import torch
@@ -79,7 +81,9 @@ class MGAATIM:
     def forward(self, images):
         images = images.detach().to(self.device)
 
-        criterion = torch.nn.CosineEmbeddingLoss()
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
 
         momentum = torch.zeros_like(images).detach().to(self.device)
 
@@ -113,11 +117,7 @@ class MGAATIM:
 
                 loss = sum(
                     [
-                        criterion(
-                            adv_feats,
-                            feats,
-                            torch.ones(1, device=adv_feats.device),
-                        )
+                        criterion(adv_feats, feats)
                         for adv_feats, feats in zip(
                             meta_train_adv_feats, meta_train_feats
                         )

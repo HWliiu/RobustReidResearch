@@ -41,7 +41,7 @@ class TransferAttack(TransferAttackBase):
         q_dataloader = data.DataLoader(q_dataset, batch_size=32, num_workers=8)
         for imgs, pids, camids in tqdm(q_dataloader, desc="Generate adv", leave=False):
             imgs, pids, camids = imgs.cuda(), pids.cuda(), camids.cuda()
-            y = agent_model(self._random_start(imgs, 1e-2))
+            y = agent_model(self._random_start(imgs, 1e-3))
             adv_imgs = attack.perturb(imgs, y)
             all_adv_imgs.append(adv_imgs.cpu())
             all_pids.append(pids.cpu())
@@ -92,7 +92,7 @@ class QueryAttack(QueryAttackBase):
         q_dataloader = data.DataLoader(q_dataset, batch_size=32, num_workers=8)
         for imgs, pids, camids in tqdm(q_dataloader, desc="Generate adv", leave=False):
             imgs, pids, camids = imgs.cuda(), pids.cuda(), camids.cuda()
-            y = target_model(self._random_start(imgs, 1e-2))
+            y = target_model(self._random_start(imgs, 1e-3))
             adv_imgs = attack.perturb(imgs, y)
             all_adv_imgs.append(adv_imgs.cpu())
             all_pids.append(pids.cpu())

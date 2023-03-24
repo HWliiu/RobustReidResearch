@@ -3,9 +3,11 @@ author: Huiwang Liu
 e-mail: liuhuiwang1025@outlook.com
 """
 
+import logging
 import math
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import accelerate
 import eagerpy as ep
 import numpy as np
 import torch
@@ -16,12 +18,11 @@ from torchvision.utils import save_image
 from tqdm.auto import tqdm
 
 from pytorch_reid_models.reid_models.evaluate import Matcher
+from pytorch_reid_models.reid_models.modeling import build_reid_model
 from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
-from reid_attack.attacker_base import QueryAttackBase
+from reid_attack.attacker_base import QueryAttackBase, timer
 from third_party.foolbox import PyTorchModel, distances
-from third_party.foolbox.attacks import (
-    LinearSearchBlendedUniformNoiseAttack,
-)
+from third_party.foolbox.attacks import LinearSearchBlendedUniformNoiseAttack
 from third_party.foolbox.attacks.base import (
     FlexibleDistanceMinimizationAttack,
     T,
@@ -40,14 +41,14 @@ from third_party.foolbox.models import Model
 class SurFree(FlexibleDistanceMinimizationAttack):
     def __init__(
         self,
-        steps: int = 10000,
+        steps: int = 100,
         max_queries: int = 5000,
-        BS_gamma: float = 0.05,
-        BS_max_iteration: int = 7,
+        BS_gamma: float = 0.01,
+        BS_max_iteration: int = 10,
         theta_max: float = 30,
         n_ortho: int = 100,
-        rho: float = 0.95,
-        T: int = 1,
+        rho: float = 0.98,
+        T: int = 3,
         quantification=False,
         with_alpha_line_search: bool = True,
         with_distance_line_search: bool = False,
@@ -190,18 +191,15 @@ class SurFree(FlexibleDistanceMinimizationAttack):
         """
         epsilons = ep.zeros(originals, len(originals))
         direction_2 = ep.zeros_like(originals)
-        # !modified: if always epsilons == 0 ?
-        _max_step = 200
+
+        # FIXME: Infinite loop
+        # !Modified
+        _max_step = 100
         _step = 0
-        while (epsilons == 0).any():
+        while (epsilons == 0).any() and _step < _max_step:
             _step += 1
-            if _step > _max_step:
-                # 'PyTorchTensor' object does not support item assignment
-                fix_idx = torch.where(epsilons.raw == 0)[0]
-                epsilons = epsilons.raw
-                epsilons[fix_idx] = 0.01
-                epsilons = ep.astensor(epsilons)
-                break
+            # !End
+
             # if epsilon ==0, we are still searching a good direction
             direction_2 = ep.where(
                 atleast_kd(epsilons == 0, direction_2.ndim),
@@ -337,7 +335,13 @@ class SurFree(FlexibleDistanceMinimizationAttack):
         )
 
         mask_upper = upper == 0
-        while mask_upper.any():
+        # FIXME: Infinite loop
+        # !Modified
+        _max_step = 100
+        _step = 0
+        while mask_upper.any() and _step < _max_step:
+            _step += 1
+            # !End
             # Find the correct lower/upper range
             # if True in mask_upper, the range haven't been found
             new_upper = lower + ep.sign(lower) * self.theta_max / self.T
@@ -671,12 +675,12 @@ class SurFreeAttack(QueryAttackBase):
         f_model = PyTorchModel(target_model, bounds=(0, 1))
         init_attack = LinearSearchBlendedUniformNoiseAttack(directions=10, steps=10)
 
-        attack = SurFree(max_queries=4000)
+        attack = SurFree(steps=500, max_queries=2000)
         attack._distance = distances.linf
 
         eps = 8 / 255
 
-        all_adv_imgs, all_pids, all_camids = [], [], []
+        all_raw_adv_imgs, all_adv_imgs, all_pids, all_camids = [], [], [], []
         q_dataloader = data.DataLoader(q_dataset, batch_size=32, num_workers=8)
         for imgs, pids, camids in tqdm(q_dataloader, desc="Generate adv", leave=False):
             imgs, pids, camids = imgs.cuda(), pids.cuda(), camids.cuda()
@@ -706,15 +710,57 @@ class SurFreeAttack(QueryAttackBase):
                 starting_points=ep.astensor(starting_points),
             )
 
-            adv_imgs = torch.clamp(no_clipped_advs, 0, 1)
+            # raw_adv_imgs means delta may larger than epislon
+            raw_adv_imgs = torch.clamp(no_clipped_advs, 0, 1)
+            adv_imgs = torch.clamp(clipped_advs, 0, 1)
+            all_raw_adv_imgs.append(raw_adv_imgs.cpu())
             all_adv_imgs.append(adv_imgs.cpu())
             all_pids.append(pids.cpu())
             all_camids.append(camids.cpu())
+
+        all_raw_adv_imgs = torch.cat(all_raw_adv_imgs)
         all_adv_imgs = torch.cat(all_adv_imgs)
         all_pids = torch.cat(all_pids)
         all_camids = torch.cat(all_camids)
 
-        return data.TensorDataset(all_adv_imgs, all_pids, all_camids)
+        return (
+            data.TensorDataset(all_raw_adv_imgs, all_pids, all_camids),
+            data.TensorDataset(all_adv_imgs, all_pids, all_camids),
+        )
+
+    def run(self):
+        logger = logging.getLogger("__main__")
+        for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
+            for target_model_name in self.target_model_names:
+                target_model = build_reid_model(target_model_name, dataset_name).cuda()
+                target_model = self.accelerator.prepare(target_model)
+
+                (raw_adv_q_dataset, adv_q_dataset), spend_time = timer(
+                    self.generate_adv
+                )(q_dataset, target_model, g_dataset)
+
+                logger.info(f"Spend Time: {spend_time}")
+
+                raw_vqe_results = self.evaluate_vqe(q_dataset, raw_adv_q_dataset)
+                logger.info(f"No Clipped VQE Metrics:\t" + raw_vqe_results)
+                vqe_results = self.evaluate_vqe(q_dataset, adv_q_dataset)
+                logger.info(f"Clipped VQE Metrics:\t" + vqe_results)
+
+                raw_reid_results = self.evaluate_reid(
+                    q_dataset, raw_adv_q_dataset, g_dataset, target_model
+                )
+                logger.info(
+                    f"No Clipped ReID Metrics: {dataset_name} {target_model_name}\n"
+                    + raw_reid_results
+                )
+                reid_results = self.evaluate_reid(
+                    q_dataset, adv_q_dataset, g_dataset, target_model
+                )
+                logger.info(
+                    f"Clipped ReID Metrics: {dataset_name} {target_model_name}\n"
+                    + reid_results
+                )
+                torch.cuda.empty_cache()
 
 
 def main():

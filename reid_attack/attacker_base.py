@@ -105,18 +105,26 @@ class TransferAttackBase(EvaluateMixin):
         self,
         agent_model_name="bagtricks_inception_v3_fastreid",
         target_model_names=(
-            "densenet121_abd",
+            # Backbone
+            "bagtricks_R50_fastreid",
+            "bagtricks_osnet_x1_0_fastreid",
+            "bagtricks_S50_fastreid",
+            "bagtricks_densenet121_fastreid",
+            "bagtricks_mobilenet_v3_large_fastreid",
+            "bagtricks_inception_resnet_v2_fastreid",
+            "bagtricks_inception_v4_fastreid",
+            # SOTA Reid
             "resnet50_abd",
+            "resnet50_agw",
+            "resnet50_ap",
+            "osnet_x1_0_dpr",
+            "osnet_ibn_x1_0_dpr",
+            "resnet50_bot",
+            "vit_transreid",
+            # SBS
+            "sbs_R50_fastreid",
             "sbs_R50_ibn_fastreid",
-            "mgn_R50_fastreid",
-            "mgn_R50_ibn_fastreid",
-            "mgn_sbs_R50_fastreid",
-            "mgn_sbs_R50_ibn_fastreid",
-            "mgn_agw_R50_fastreid",
-            "mgn_agw_R50_ibn_fastreid",
-            "mgn_S50_fastreid",
-            "mgn_S50_ibn_fastreid",
-            "mgn_sbs_S50_ibn_fastreid",
+            "sbs_S50_fastreid",
         ),
         target_dataset_names=("dukemtmcreid", "market1501", "msmt17"),
         query_num=500,
@@ -126,7 +134,7 @@ class TransferAttackBase(EvaluateMixin):
         self.test_datasets = build_test_datasets(
             dataset_names=target_dataset_names, query_num=query_num
         )
-        # only for evaluation
+        # It is only used to evaluate the results, and it will greatly affect the effect during training
         self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
 
     def generate_adv(self, q_dataset, agent_model):
@@ -167,18 +175,23 @@ class EnsTransferAttackBase(EvaluateMixin):
             "bagtricks_mobilenet_v3_large_fastreid",
         ),
         target_model_names=(
-            "densenet121_abd",
+            # Backbone
+            "bagtricks_R50_fastreid",
+            "bagtricks_osnet_x1_0_fastreid",
+            "bagtricks_S50_fastreid",
+            "bagtricks_densenet121_fastreid"
+            # SOTA Reid
             "resnet50_abd",
+            "resnet50_agw",
+            "resnet50_ap",
+            "osnet_x1_0_dpr",
+            "osnet_ibn_x1_0_dpr",
+            "resnet50_bot",
+            "vit_transreid",
+            # SBS
+            "sbs_R50_fastreid",
             "sbs_R50_ibn_fastreid",
-            "mgn_R50_fastreid",
-            "mgn_R50_ibn_fastreid",
-            "mgn_sbs_R50_fastreid",
-            "mgn_sbs_R50_ibn_fastreid",
-            "mgn_agw_R50_fastreid",
-            "mgn_agw_R50_ibn_fastreid",
-            "mgn_S50_fastreid",
-            "mgn_S50_ibn_fastreid",
-            "mgn_sbs_S50_ibn_fastreid",
+            "sbs_S50_fastreid",
         ),
         target_dataset_names=("dukemtmcreid", "market1501", "msmt17"),
         query_num=500,
@@ -228,18 +241,26 @@ class QueryAttackBase(EvaluateMixin):
     def __init__(
         self,
         target_model_names=(
-            "densenet121_abd",
+            # Backbone
+            "bagtricks_R50_fastreid",
+            "bagtricks_osnet_x1_0_fastreid",
+            "bagtricks_S50_fastreid",
+            "bagtricks_densenet121_fastreid",
+            "bagtricks_mobilenet_v3_large_fastreid",
+            "bagtricks_inception_resnet_v2_fastreid",
+            "bagtricks_inception_v4_fastreid",
+            # SOTA Reid
             "resnet50_abd",
+            "resnet50_agw",
+            "resnet50_ap",
+            "osnet_x1_0_dpr",
+            "osnet_ibn_x1_0_dpr",
+            "resnet50_bot",
+            "vit_transreid",
+            # SBS
+            "sbs_R50_fastreid",
             "sbs_R50_ibn_fastreid",
-            "mgn_R50_fastreid",
-            "mgn_R50_ibn_fastreid",
-            "mgn_sbs_R50_fastreid",
-            "mgn_sbs_R50_ibn_fastreid",
-            "mgn_agw_R50_fastreid",
-            "mgn_agw_R50_ibn_fastreid",
-            "mgn_S50_fastreid",
-            "mgn_S50_ibn_fastreid",
-            "mgn_sbs_S50_ibn_fastreid",
+            "sbs_S50_fastreid",
         ),
         target_dataset_names=("dukemtmcreid", "market1501", "msmt17"),
         query_num=100,
@@ -248,7 +269,7 @@ class QueryAttackBase(EvaluateMixin):
         self.test_datasets = build_test_datasets(
             dataset_names=target_dataset_names, query_num=query_num
         )
-        self.accelerator = accelerate.Accelerator(mixed_precision="no")
+        self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
 
     def generate_adv(self, q_dataset, target_model, g_dataset):
         raise NotImplementedError
@@ -258,11 +279,12 @@ class QueryAttackBase(EvaluateMixin):
         for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
             for target_model_name in self.target_model_names:
                 target_model = build_reid_model(target_model_name, dataset_name).cuda()
-                target_model = self.accelerator.prepare(target_model)
 
                 adv_q_dataset, spend_time = timer(self.generate_adv)(
                     q_dataset, target_model, g_dataset
                 )
+
+                target_model = self.accelerator.prepare(target_model)
 
                 logger.info(f"Spend Time: {spend_time}")
 

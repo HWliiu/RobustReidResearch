@@ -5,6 +5,7 @@ e-mail: liuhuiwang1025@outlook.com
 
 import random
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 
 import kornia as K
@@ -21,6 +22,7 @@ from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
 from reid_attack.attacker_base import TransferAttackBase
 
 # 'third_party/torchattacks/wrappers/lgv.py' not available
+
 
 class EnsMIFGSM:
     def __init__(
@@ -83,7 +85,9 @@ class EnsMIFGSM:
     def forward(self, images):
         images = images.detach().to(self.device)
 
-        criterion = torch.nn.CosineEmbeddingLoss()
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
 
         momentum = torch.zeros_like(images).detach().to(self.device)
 
@@ -107,11 +111,7 @@ class EnsMIFGSM:
             # Calculate loss
             loss = sum(
                 [
-                    criterion(
-                        adv_feats,
-                        feats,
-                        torch.ones(1, device=self.device),
-                    )
+                    criterion(adv_feats, feats)
                     for adv_feats, feats in zip(adv_feats_list, feats_list)
                 ]
             )
