@@ -23,7 +23,7 @@ class Bandits:
         online_lr=100,
         max_queries=4000,
         alpha=0.01,
-        downsampling=True,
+        downsampling=4,
     ):
         self.target_model = target_model
         self.target_model.eval().requires_grad_(False)
@@ -56,9 +56,10 @@ class Bandits:
     def forward(self, imgs, pids, camids):
         imgs = imgs.detach().to(self.device)
 
-        if self.downsampling:
-            b, c, h, w = imgs.shape
-            prior_shape = (b, c, int(h / 4), int(w / 4))
+        b, c, h, w = imgs.shape
+        if self.downsampling is not None:
+            d = self.downsampling
+            prior_shape = (b, c, int(h / d), int(w / d))
             prior = imgs.new_zeros(prior_shape)
         else:
             prior = torch.zeros_like(imgs)
@@ -70,23 +71,23 @@ class Bandits:
         for _ in range(self.max_queries // 2):
             dim = prior.nelement() / imgs.shape[0]
             exp_noise = self.exploration * torch.randn_like(prior) / (dim**0.5)
-            q1 = F.interpolate(prior + exp_noise, size=adv_imgs.shape[-2:])
-            q1_norm = torch.linalg.vector_norm(q1, dim=(1, 2, 3), keepdim=True)
-            input1 = adv_imgs + self.fd_eta * q1 / q1_norm
-            adv_feats_1 = self._target_model_forward(input1, pids, camids)
-            l1 = (F.normalize(adv_feats_1) * F.normalize(feats)).sum(dim=1)
 
-            q2 = F.interpolate(prior - exp_noise, size=adv_imgs.shape[-2:])
-            q2_norm = torch.linalg.vector_norm(q2, dim=(1, 2, 3), keepdim=True)
-            input2 = adv_imgs + self.fd_eta * q2 / q2_norm
-            adv_feats_2 = self._target_model_forward(input2, pids, camids)
-            l2 = (F.normalize(adv_feats_2) * F.normalize(feats)).sum(dim=1)
+            q1 = F.normalize(F.interpolate(prior + exp_noise, size=(h, w)).view(b, -1))
+            input1 = adv_imgs + self.fd_eta * q1.view_as(imgs)
+            adv1 = self._target_model_forward(input1, pids, camids)
+            l1 = (F.normalize(adv1) * F.normalize(feats)).sum(dim=1)
+
+            q2 = F.normalize(F.interpolate(prior - exp_noise, size=(h, w)).view(b, -1))
+            input2 = adv_imgs + self.fd_eta * q2.view_as(imgs)
+            adv2 = self._target_model_forward(input2, pids, camids)
+            l2 = (F.normalize(adv2) * F.normalize(feats)).sum(dim=1)
+
             est_deriv = (l1 - l2) / (self.fd_eta * self.exploration)
             est_grad = est_deriv.view(-1, 1, 1, 1) * exp_noise
 
             prior = self.prior_step(prior, est_grad, self.online_lr)
 
-            grad = F.interpolate(prior, size=adv_imgs.shape[-2:])
+            grad = F.interpolate(prior, size=(h, w))
 
             adv_imgs -= self.alpha * grad.sign()
             delta = torch.clamp(adv_imgs - imgs, min=-self.eps, max=self.eps)
