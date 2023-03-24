@@ -3,15 +3,13 @@ author: Huiwang Liu
 e-mail: liuhuiwang1025@outlook.com
 """
 
-from functools import partial
-
 import torch
 from torch.utils import data
 from torchvision.utils import save_image
 from tqdm.auto import tqdm
 
 from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
-from reid_attack.attacker_base import QueryAttackBase, TransferAttackBase
+from reid_attack.attacker_base import TransferAttackBase
 from third_party.torchattacks import (
     BIM,
     DIFGSM,
@@ -61,7 +59,7 @@ class TransferAttack(TransferAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)

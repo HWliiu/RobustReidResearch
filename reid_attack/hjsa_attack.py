@@ -26,7 +26,7 @@ from third_party.foolbox.criteria import Misclassification
 
 
 class ReidMisCriterion(Misclassification):
-    # Strange class for foolbox compatibility
+    # For foolbox compatibility
     def __init__(self, q_pids, q_camids, g_pids, g_camids, g_feats_optimized, topk=10):
         self.q_pids = q_pids
         self.q_camids = q_camids
@@ -66,9 +66,9 @@ class HJSAAttack(QueryAttackBase):
 
         f_model = PyTorchModel(target_model, bounds=(0, 1))
         init_attack = LinearSearchBlendedUniformNoiseAttack(directions=10, steps=10)
-        # about 4,000 queries per image
+        # about 2,000 queries per image
         attack = HopSkipJumpAttack(
-            steps=20,
+            steps=10,
             max_gradient_eval_steps=180,
             constraint="linf",
         )
@@ -86,16 +86,16 @@ class HJSAAttack(QueryAttackBase):
 
             starting_points = init_attack.run(f_model, imgs, criterion)
             # Dropping non adversary, to prevent starting points is not adversarial
-            is_adv = get_is_adversarial(criterion, f_model)(starting_points)
-            is_adv_idx = torch.where(is_adv.raw)[0]
-            imgs, pids, camids = (
-                imgs[is_adv_idx].clone(),
-                pids[is_adv_idx].clone(),
-                camids[is_adv_idx].clone(),
-            )
-            starting_points = starting_points[is_adv_idx].clone()
-            criterion.q_pids = criterion.q_pids[is_adv_idx].clone()
-            criterion.q_camids = criterion.q_camids[is_adv_idx].clone()
+            # is_adv = get_is_adversarial(criterion, f_model)(starting_points)
+            # is_adv_idx = torch.where(is_adv.raw)[0]
+            # imgs, pids, camids = (
+            #     imgs[is_adv_idx].clone(),
+            #     pids[is_adv_idx].clone(),
+            #     camids[is_adv_idx].clone(),
+            # )
+            # starting_points = starting_points[is_adv_idx].clone()
+            # criterion.q_pids = criterion.q_pids[is_adv_idx].clone()
+            # criterion.q_camids = criterion.q_camids[is_adv_idx].clone()
 
             no_clipped_advs, clipped_advs, success = attack(
                 f_model,
@@ -159,7 +159,7 @@ class HJSAAttack(QueryAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)

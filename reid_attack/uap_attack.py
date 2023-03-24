@@ -14,7 +14,6 @@ from torchvision.utils import save_image
 from tqdm.auto import tqdm
 
 from pytorch_reid_models.reid_models.data import build_train_dataset
-from pytorch_reid_models.reid_models.modeling import build_reid_model
 from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
 from reid_attack.attacker_base import TransferAttackBase
 
@@ -86,8 +85,8 @@ class TIMUAP:
         )
         t_dataloader = data.DataLoader(t_dataset, batch_size=32)
         for e in range(1, self.epoch + 1):
-            for imgs, pids, camids in tqdm(
-                t_dataloader, desc=f"Train UAP[{e}/{self.epoch}]", leave=False
+            for imgs, _, _ in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
             ):
                 imgs = imgs.to(self.device)
 
@@ -233,7 +232,7 @@ class UAPAttack(TransferAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)

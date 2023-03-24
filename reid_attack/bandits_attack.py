@@ -21,9 +21,9 @@ class Bandits:
         fd_eta=0.1,
         exploration=1.0,
         online_lr=100,
-        max_queries=4000,
+        max_queries=2000,
         alpha=0.01,
-        downsampling=4,
+        downsampling=6,
     ):
         self.target_model = target_model
         self.target_model.eval().requires_grad_(False)
@@ -121,7 +121,7 @@ class BanditsAttack(QueryAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)

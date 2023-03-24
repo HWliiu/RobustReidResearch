@@ -5,9 +5,8 @@ e-mail: liuhuiwang1025@outlook.com
 
 import logging
 import math
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
-import accelerate
 import eagerpy as ep
 import numpy as np
 import torch
@@ -691,16 +690,16 @@ class SurFreeAttack(QueryAttackBase):
 
             starting_points = init_attack.run(f_model, imgs, criterion)
             # Dropping non adversary, to prevent starting points is not adversarial
-            is_adv = get_is_adversarial(criterion, f_model)(starting_points)
-            is_adv_idx = torch.where(is_adv.raw)[0]
-            imgs, pids, camids = (
-                imgs[is_adv_idx].clone(),
-                pids[is_adv_idx].clone(),
-                camids[is_adv_idx].clone(),
-            )
-            starting_points = starting_points[is_adv_idx].clone()
-            criterion.q_pids = criterion.q_pids[is_adv_idx].clone()
-            criterion.q_camids = criterion.q_camids[is_adv_idx].clone()
+            # is_adv = get_is_adversarial(criterion, f_model)(starting_points)
+            # is_adv_idx = torch.where(is_adv.raw)[0]
+            # imgs, pids, camids = (
+            #     imgs[is_adv_idx].clone(),
+            #     pids[is_adv_idx].clone(),
+            #     camids[is_adv_idx].clone(),
+            # )
+            # starting_points = starting_points[is_adv_idx].clone()
+            # criterion.q_pids = criterion.q_pids[is_adv_idx].clone()
+            # criterion.q_camids = criterion.q_camids[is_adv_idx].clone()
 
             no_clipped_advs, clipped_advs, success = attack(
                 f_model,
@@ -764,7 +763,7 @@ class SurFreeAttack(QueryAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)

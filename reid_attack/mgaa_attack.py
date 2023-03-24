@@ -6,7 +6,6 @@ e-mail: liuhuiwang1025@outlook.com
 from functools import partial
 
 import kornia as K
-import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils import data
@@ -202,7 +201,7 @@ class MGAATIMAttack(EnsTransferAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)

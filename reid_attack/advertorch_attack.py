@@ -17,6 +17,8 @@ from third_party.advertorch import attacks
 
 class TransferAttack(TransferAttackBase):
     def _random_start(self, imgs, eps):
+        # When calculating cosine loss, the adversarial sample cannot be the
+        # same as the original to prevent loss from being 0 all the time
         imgs = imgs + torch.empty_like(imgs).uniform_(-eps, eps)
         imgs = torch.clamp(imgs, min=0, max=1).detach()
         return imgs
@@ -75,7 +77,7 @@ class QueryAttack(QueryAttackBase):
         #     exploration=1.0,
         #     online_lr=100,
         #     loss_fn=loss_fn,
-        #     nb_iter=2500,
+        #     nb_iter=2000,
         #     eps_iter=0.01,
         #     downsampling=True,
         # )
@@ -105,7 +107,7 @@ class QueryAttack(QueryAttackBase):
 
 
 def main():
-    setup_logger(name="reid_models")
+    setup_logger(name="pytorch_reid_models.reid_models")
     setup_logger(name="__main__")
 
     set_seed(42)
