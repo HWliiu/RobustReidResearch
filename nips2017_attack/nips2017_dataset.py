@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 
 
 class NIPS2017Dataset(Dataset):
+    # Download link https://www.kaggle.com/competitions/nips-2017-non-targeted-adversarial-attack/data
     def __init__(self, root_dir, transform=None):
         self.root_dir = pathlib.Path(root_dir)
         self.transform = transform

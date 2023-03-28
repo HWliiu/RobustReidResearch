@@ -165,77 +165,65 @@ class TransferAttackBase(EvaluateMixin):
             torch.cuda.empty_cache()
 
 
-# TODO: Need To Modify
-# class EnsTransferAttackBase(EvaluateMixin):
-#     def __init__(
-#         self,
-#         agent_model_names=(
-#             "bagtricks_inception_v3_fastreid",
-#             "bagtricks_inception_v4_fastreid",
-#             "bagtricks_inception_resnet_v2_fastreid",
-#             "bagtricks_mobilenet_v3_large_fastreid",
-#         ),
-#         target_model_names=(
-#             # Backbone
-#             "bagtricks_R50_fastreid",
-#             "bagtricks_osnet_x1_0_fastreid",
-#             "bagtricks_S50_fastreid",
-#             "bagtricks_densenet121_fastreid"
-#             # SOTA Reid
-#             "resnet50_abd",
-#             "resnet50_agw",
-#             "resnet50_ap",
-#             "osnet_x1_0_dpr",
-#             "osnet_ibn_x1_0_dpr",
-#             "resnet50_bot",
-#             "vit_transreid",
-#             # SBS
-#             "sbs_R50_fastreid",
-#             "sbs_R50_ibn_fastreid",
-#             "sbs_S50_fastreid",
-#         ),
-#         target_dataset_names=("dukemtmcreid", "market1501", "msmt17"),
-#         query_num=500,
-#     ):
-#         self.agent_model_names = agent_model_names
-#         self.target_model_names = target_model_names
-#         self.test_datasets = build_test_datasets(
-#             dataset_names=target_dataset_names, query_num=query_num
-#         )
-#         # only for evaluation
-#         self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
+class EnsTransferAttackBase(EvaluateMixin):
+    def __init__(
+        self,
+        agent_model_names=(
+            "inception_v3",
+            "inception_v4",
+            "inception_resnet_v2",
+            "mobilenetv3_large_100",
+        ),
+        target_model_names=(
+            "resnet50",
+            "densenet121",
+            "inception_v4",
+            "seresnet50",
+        ),
+        test_num=500,
+    ):
+        self.agent_model_names = agent_model_names
+        self.target_model_names = target_model_names
+        self.test_num = test_num
 
-#     def generate_adv(self, q_dataset, agent_models):
-#         raise NotImplementedError
+        self.accelerator = accelerate.Accelerator(mixed_precision="fp16")
 
-#     def run(self):
-#         logger = logging.getLogger("__main__")
-#         for dataset_name, (q_dataset, g_dataset) in self.test_datasets.items():
-#             agent_models = [
-#                 build_reid_model(agent_model_name, dataset_name).cuda()
-#                 for agent_model_name in self.agent_model_names
-#             ]
-#             adv_q_dataset, spend_time = timer(self.generate_adv)(
-#                 q_dataset, agent_models
-#             )
+    def generate_adv(self, test_dataset, agent_models):
+        raise NotImplementedError
 
-#             logger.info(f"Spend Time: {spend_time}")
+    def run(self):
+        logger = logging.getLogger("__main__")
 
-#             vqe_results = self.evaluate_vqe(q_dataset, adv_q_dataset)
-#             logger.info(f"VQE Metrics:\t" + vqe_results)
+        test_dataset = build_test_dataset(self.test_num)
 
-#             for target_model_name in self.target_model_names:
-#                 target_model = build_reid_model(target_model_name, dataset_name).cuda()
-#                 target_model = self.accelerator.prepare(target_model)
+        agent_models = [
+            timm_model_wrapper(
+                timm.create_model(agent_model_name, pretrained=True)
+            ).cuda()
+            for agent_model_name in self.agent_model_names
+        ]
+        adv_test_dataset, spend_time = timer(self.generate_adv)(
+            test_dataset, agent_models
+        )
 
-#                 reid_results = self.evaluate_reid(
-#                     q_dataset, adv_q_dataset, g_dataset, target_model
-#                 )
-#                 logger.info(
-#                     f"ReID Metrics: {dataset_name} {'|'.join(self.agent_model_names)}"
-#                     f"-->{target_model_name}\n" + reid_results
-#                 )
-#                 torch.cuda.empty_cache()
+        logger.info(f"Spend Time: {spend_time}")
+        vqe_results = self.evaluate_vqe(test_dataset, adv_test_dataset)
+        logger.info(f"VQE Metrics:\t" + vqe_results)
+
+        for target_model_name in self.target_model_names:
+            target_model = timm_model_wrapper(
+                timm.create_model(target_model_name, pretrained=True).eval().cuda()
+            )
+            target_model = self.accelerator.prepare(target_model)
+
+            imagenet_results = self.evaluate_imagenet(
+                test_dataset, adv_test_dataset, target_model
+            )
+            logger.info(
+                f"ImageNet Metrics: {'|'.join(self.agent_model_names)}-->{target_model_name}\n"
+                + imagenet_results
+            )
+            torch.cuda.empty_cache()
 
 
 class QueryAttackBase(EvaluateMixin):
