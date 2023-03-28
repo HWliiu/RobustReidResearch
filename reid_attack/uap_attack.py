@@ -6,7 +6,6 @@ e-mail: liuhuiwang1025@outlook.com
 from functools import partial
 
 import kornia as K
-import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils import data
@@ -21,18 +20,18 @@ from reid_attack.attacker_base import TransferAttackBase
 class TIMUAP:
     def __init__(
         self,
-        agent_model,
-        epoch=10,
+        attacked_model,
+        epoch=1,
         eps=8 / 255,
-        alpha=0.001,
+        alpha=1 / 255,
         decay=1.0,
         len_kernel=15,
         nsig=3,
         resize_rate=0.9,
         diversity_prob=0.5,
     ):
-        self.agent_model = agent_model
-        self.agent_model.eval().requires_grad_(False)
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
         self.eps = eps
         self.epoch = epoch
         self.decay = decay
@@ -42,7 +41,7 @@ class TIMUAP:
         self.len_kernel = (len_kernel, len_kernel)
         self.nsig = (nsig, nsig)
 
-        self.device = next(agent_model.parameters()).device
+        self.device = next(attacked_model.parameters()).device
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -90,10 +89,10 @@ class TIMUAP:
             ):
                 imgs = imgs.to(self.device)
 
-                feats = self.agent_model(imgs)
+                feats = self.attacked_model(imgs)
                 uap.requires_grad_(True)
                 adv_imgs = torch.clamp(imgs + uap, 0, 1)
-                adv_feats = self.agent_model(self.input_diversity(adv_imgs))
+                adv_feats = self.attacked_model(self.input_diversity(adv_imgs))
 
                 loss = criterion(adv_feats, feats)
 
@@ -115,7 +114,7 @@ class TIMUAP:
 class OPTIMUAP:
     def __init__(
         self,
-        agent_model,
+        attacked_model,
         epoch=20,
         eps=8 / 255,
         lr=0.01,
@@ -124,8 +123,8 @@ class OPTIMUAP:
         resize_rate=0.9,
         diversity_prob=0.5,
     ):
-        self.agent_model = agent_model
-        self.agent_model.eval().requires_grad_(False)
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
         self.eps = eps
         self.epoch = epoch
         self.lr = lr
@@ -136,7 +135,7 @@ class OPTIMUAP:
 
         self.uap = None
         self.momentum = None
-        self.device = next(agent_model.parameters()).device
+        self.device = next(attacked_model.parameters()).device
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -192,9 +191,9 @@ class OPTIMUAP:
             ):
                 imgs = imgs.to(self.device)
 
-                feats = self.agent_model(imgs)
+                feats = self.attacked_model(imgs)
                 adv_imgs = torch.clamp(imgs + self.convert2uap(w), 0, 1)
-                adv_feats = self.agent_model(self.input_diversity(adv_imgs))
+                adv_feats = self.attacked_model(self.input_diversity(adv_imgs))
 
                 loss = 1.0 - criterion(adv_feats, feats)
 

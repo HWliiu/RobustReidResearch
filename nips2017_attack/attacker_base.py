@@ -2,6 +2,7 @@
 author: Huiwang Liu
 e-mail: liuhuiwang1025@outlook.com
 """
+
 import logging
 import time
 import warnings
@@ -179,6 +180,7 @@ class EnsTransferAttackBase(EvaluateMixin):
             "densenet121",
             "inception_v4",
             "seresnet50",
+            "vit_base_patch16_224"
         ),
         test_num=500,
     ):

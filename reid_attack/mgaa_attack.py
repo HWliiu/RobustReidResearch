@@ -19,7 +19,7 @@ from reid_attack.attacker_base import EnsTransferAttackBase
 class MGAATIM:
     def __init__(
         self,
-        models,
+        attacked_models,
         eps=8 / 255,
         alpha=2 / 255,
         meta_test_step=10,
@@ -31,9 +31,9 @@ class MGAATIM:
         diversity_prob=0.5,
         random_start=True,
     ):
-        self.agent_models = models
-        for model in self.agent_models:
-            model.eval().requires_grad_(False)
+        self.attacked_models = attacked_models
+        for model in self.attacked_models:
+            model.eval()
         self.eps = eps
         self.meta_test_step = meta_test_step
         self.meta_train_step = meta_train_step
@@ -45,7 +45,7 @@ class MGAATIM:
         self.len_kernel = (len_kernel, len_kernel)
         self.nsig = (nsig, nsig)
 
-        self.device = next(models[0].parameters()).device
+        self.device = next(attacked_models[0].parameters()).device
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -94,14 +94,14 @@ class MGAATIM:
             )
             adv_images = torch.clamp(adv_images, min=0, max=1).detach()
 
-        all_feats = [model(images) for model in self.agent_models]
+        all_feats = [model(images) for model in self.attacked_models]
         for _ in range(self.meta_test_step):
-            rand_idx = torch.randperm(len(self.agent_models))
+            rand_idx = torch.randperm(len(self.attacked_models))
             meta_train_idx = rand_idx[:-1]
             meta_test_idx = rand_idx[-1]
 
-            meta_train_models = [self.agent_models[i] for i in meta_train_idx]
-            meta_test_model = self.agent_models[meta_test_idx]
+            meta_train_models = [self.attacked_models[i] for i in meta_train_idx]
+            meta_test_model = self.attacked_models[meta_test_idx]
 
             # meta train
             meta_train_adv_imgs = adv_images.clone()

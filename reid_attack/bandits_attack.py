@@ -26,7 +26,7 @@ class Bandits:
         downsampling=6,
     ):
         self.target_model = target_model
-        self.target_model.eval().requires_grad_(False)
+        self.target_model.eval()
         self.eps = eps
         self.fd_eta = fd_eta
         self.exploration = exploration

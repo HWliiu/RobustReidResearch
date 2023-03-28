@@ -19,7 +19,7 @@ from reid_attack.attacker_base import EnsTransferAttackBase
 class EnsTIM:
     def __init__(
         self,
-        agent_models,
+        attacked_models,
         eps=8 / 255,
         alpha=1 / 255,
         steps=50,
@@ -30,9 +30,9 @@ class EnsTIM:
         diversity_prob=0.5,
         random_start=True,
     ):
-        self.agent_models = agent_models
-        for model in self.agent_models:
-            model.eval().requires_grad_(False)
+        self.attacked_models = attacked_models
+        for model in self.attacked_models:
+            model.eval()
         self.eps = eps
         self.steps = steps
         self.decay = decay
@@ -43,7 +43,7 @@ class EnsTIM:
         self.len_kernel = (len_kernel, len_kernel)
         self.nsig = (nsig, nsig)
 
-        self.device = next(agent_models[0].parameters()).device
+        self.device = next(attacked_models[0].parameters()).device
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -78,7 +78,7 @@ class EnsTIM:
     def forward(self, images):
         images = images.detach().to(self.device)
 
-        criterion = criterion = partial(
+        criterion = partial(
             torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
         )
 
@@ -92,12 +92,12 @@ class EnsTIM:
             )
             adv_images = torch.clamp(adv_images, min=0, max=1).detach()
 
-        all_feats = [model(images) for model in self.agent_models]
+        all_feats = [model(images) for model in self.attacked_models]
         for _ in range(self.steps):
             adv_images.requires_grad = True
 
             all_adv_feats = [
-                model(self.input_diversity(adv_images)) for model in self.agent_models
+                model(self.input_diversity(adv_images)) for model in self.attacked_models
             ]
 
             # Calculate loss
@@ -106,7 +106,7 @@ class EnsTIM:
                     criterion(adv_feats, feats)
                     for adv_feats, feats in zip(all_adv_feats, all_feats)
                 ]
-            ) / len(self.agent_models)
+            ) / len(self.attacked_models)
 
             # Update adversarial images
             grad = torch.autograd.grad(

@@ -33,18 +33,18 @@ def build_train_dataset(dir_path, train_num):
 class TIMUAP:
     def __init__(
         self,
-        agent_model,
+        attacked_model,
         epoch=10,
         eps=8 / 255,
-        alpha=0.001,
+        alpha=1 / 255,
         decay=1.0,
         len_kernel=15,
         nsig=3,
         resize_rate=0.9,
         diversity_prob=0.5,
     ):
-        self.agent_model = agent_model
-        self.agent_model.eval().requires_grad_(False)
+        self.attacked_model = attacked_model
+        self.agent_model.eval()
         self.eps = eps
         self.epoch = epoch
         self.decay = decay
@@ -54,7 +54,7 @@ class TIMUAP:
         self.len_kernel = (len_kernel, len_kernel)
         self.nsig = (nsig, nsig)
 
-        self.device = next(agent_model.parameters()).device
+        self.device = next(attacked_model.parameters()).device
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -99,7 +99,7 @@ class TIMUAP:
 
                 uap.requires_grad_(True)
                 adv_imgs = torch.clamp(imgs + uap, 0, 1)
-                logits = self.agent_model(self.input_diversity(adv_imgs))
+                logits = self.attacked_model(self.input_diversity(adv_imgs))
 
                 loss = criterion(logits, lbls)
 

@@ -19,7 +19,7 @@ from reid_attack.attacker_base import TransferAttackBase
 class TIM:
     def __init__(
         self,
-        agent_model,
+        attacked_model,
         eps=8 / 255,
         alpha=1 / 255,
         steps=50,
@@ -30,8 +30,8 @@ class TIM:
         diversity_prob=0.5,
         random_start=True,
     ):
-        self.agent_model = agent_model
-        self.agent_model.eval().requires_grad_(False)
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
         self.eps = eps
         self.steps = steps
         self.decay = decay
@@ -42,7 +42,7 @@ class TIM:
         self.len_kernel = (len_kernel, len_kernel)
         self.nsig = (nsig, nsig)
 
-        self.device = next(agent_model.parameters()).device
+        self.device = next(attacked_model.parameters()).device
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -95,8 +95,8 @@ class TIM:
     #     for _ in range(self.steps):
     #         adv_images.requires_grad = True
 
-    #         adv_feats = self.model(self.input_diversity(adv_images))
-    #         matches_feats = torch.stack([self.model(match) for match in matches])
+    #         adv_feats = self.attacked_model(self.input_diversity(adv_images))
+    #         matches_feats = torch.stack([self.attacked_model(match) for match in matches])
 
     #         # Calculate loss
     #         loss = criterion(
@@ -143,11 +143,11 @@ class TIM:
             )
             adv_images = torch.clamp(adv_images, min=0, max=1).detach()
 
-        feats = self.agent_model(images)
+        feats = self.attacked_model(images)
         for _ in range(self.steps):
             adv_images.requires_grad = True
 
-            adv_feats = self.agent_model(self.input_diversity(adv_images))
+            adv_feats = self.attacked_model(self.input_diversity(adv_images))
 
             # Calculate loss
             loss = criterion(adv_feats, feats)
@@ -162,6 +162,221 @@ class TIM:
             grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
             grad = grad + momentum * self.decay
             momentum = grad
+
+            adv_images = adv_images.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)
+            adv_images = torch.clamp(images + delta, min=0, max=1).detach()
+
+        return adv_images
+
+    def __call__(self, images):
+        return self.forward(images)
+
+
+class DIM:
+    def __init__(
+        self,
+        attacked_model,
+        eps=8 / 255,
+        alpha=1 / 255,
+        steps=50,
+        decay=1.0,
+        resize_rate=0.9,
+        diversity_prob=0.5,
+        random_start=True,
+    ):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.steps = steps
+        self.decay = decay
+        self.alpha = alpha
+        self.resize_rate = resize_rate
+        self.diversity_prob = diversity_prob
+        self.random_start = random_start
+
+        self.device = next(attacked_model.parameters()).device
+
+    def input_diversity(self, x):
+        img_size = x.shape[-1]
+        img_resize = int(img_size * self.resize_rate)
+
+        if self.resize_rate < 1:
+            img_size = img_resize
+            img_resize = x.shape[-1]
+
+        rnd = torch.randint(
+            low=img_size, high=img_resize, size=(1,), dtype=torch.int32
+        ).item()
+        ratio = x.shape[2] / x.shape[3]
+        rescaled = F.interpolate(
+            x, size=[int(rnd * ratio), rnd], mode="bilinear", align_corners=False
+        )
+        h_rem = int((img_resize - rnd) * ratio)
+        w_rem = img_resize - rnd
+        pad_top = torch.randint(low=0, high=h_rem, size=(1,), dtype=torch.int32).item()
+        pad_bottom = h_rem - pad_top
+        pad_left = torch.randint(low=0, high=w_rem, size=(1,), dtype=torch.int32).item()
+        pad_right = w_rem - pad_left
+
+        padded = F.pad(
+            rescaled,
+            [pad_left, pad_right, pad_top, pad_bottom],
+            value=0,
+        )
+
+        return padded if torch.rand(1) < self.diversity_prob else x
+
+    def forward(self, images):
+        images = images.detach().to(self.device)
+
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+
+        momentum = torch.zeros_like(images).detach().to(self.device)
+
+        adv_images = images.clone().detach()
+        if self.random_start:
+            # Starting at a uniformly random point
+            adv_images = adv_images + torch.empty_like(adv_images).uniform_(
+                -self.eps, self.eps
+            )
+            adv_images = torch.clamp(adv_images, min=0, max=1).detach()
+
+        feats = self.attacked_model(images)
+        for _ in range(self.steps):
+            adv_images.requires_grad = True
+
+            adv_feats = self.attacked_model(self.input_diversity(adv_images))
+
+            # Calculate loss
+            loss = criterion(adv_feats, feats)
+
+            # Update adversarial images
+            grad = torch.autograd.grad(loss, adv_images)[0]
+
+            grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+            grad = grad + momentum * self.decay
+            momentum = grad
+
+            adv_images = adv_images.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)
+            adv_images = torch.clamp(images + delta, min=0, max=1).detach()
+
+        return adv_images
+
+    def __call__(self, images):
+        return self.forward(images)
+
+
+class MI:
+    def __init__(
+        self,
+        attacked_model,
+        eps=8 / 255,
+        alpha=1 / 255,
+        steps=50,
+        decay=1.0,
+        random_start=True,
+    ):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.steps = steps
+        self.decay = decay
+        self.alpha = alpha
+        self.random_start = random_start
+
+        self.device = next(attacked_model.parameters()).device
+
+    def forward(self, images):
+        images = images.detach().to(self.device)
+
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+
+        momentum = torch.zeros_like(images).detach().to(self.device)
+
+        adv_images = images.clone().detach()
+        if self.random_start:
+            # Starting at a uniformly random point
+            adv_images = adv_images + torch.empty_like(adv_images).uniform_(
+                -self.eps, self.eps
+            )
+            adv_images = torch.clamp(adv_images, min=0, max=1).detach()
+
+        feats = self.attacked_model(images)
+        for _ in range(self.steps):
+            adv_images.requires_grad = True
+
+            adv_feats = self.attacked_model(adv_images)
+
+            # Calculate loss
+            loss = criterion(adv_feats, feats)
+
+            # Update adversarial images
+            grad = torch.autograd.grad(loss, adv_images)[0]
+
+            grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+            grad = grad + momentum * self.decay
+            momentum = grad
+
+            adv_images = adv_images.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)
+            adv_images = torch.clamp(images + delta, min=0, max=1).detach()
+
+        return adv_images
+
+    def __call__(self, images):
+        return self.forward(images)
+
+
+class BIM:
+    def __init__(
+        self,
+        attacked_model,
+        eps=8 / 255,
+        alpha=1 / 255,
+        steps=50,
+        random_start=True,
+    ):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.steps = steps
+        self.alpha = alpha
+        self.random_start = random_start
+
+        self.device = next(attacked_model.parameters()).device
+
+    def forward(self, images):
+        images = images.detach().to(self.device)
+
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+
+        adv_images = images.clone().detach()
+        if self.random_start:
+            # Starting at a uniformly random point
+            adv_images = adv_images + torch.empty_like(adv_images).uniform_(
+                -self.eps, self.eps
+            )
+            adv_images = torch.clamp(adv_images, min=0, max=1).detach()
+
+        feats = self.attacked_model(images)
+        for _ in range(self.steps):
+            adv_images.requires_grad = True
+
+            adv_feats = self.attacked_model(adv_images)
+
+            # Calculate loss
+            loss = criterion(adv_feats, feats)
+
+            # Update adversarial images
+            grad = torch.autograd.grad(loss, adv_images)[0]
 
             adv_images = adv_images.detach() + self.alpha * grad.sign()
             delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)

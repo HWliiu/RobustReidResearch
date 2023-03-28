@@ -21,9 +21,7 @@ from pytorch_reid_models.reid_models.data import build_train_dataloader
 from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
 from reid_attack.attacker_base import TransferAttackBase
 
-# 'third_party/torchattacks/wrappers/lgv.py' not available
-
-
+# 'third_party/torchattacks/wrappers/lgv.py' not availableF
 class EnsMIFGSM:
     def __init__(
         self,
@@ -39,7 +37,7 @@ class EnsMIFGSM:
         random_start=True,
     ):
         self.random_ens_model = random_ens_model
-        self.random_ens_model.eval().requires_grad_(False)
+        self.random_ens_model.eval()
         self.eps = eps
         self.steps = steps
         self.decay = decay
@@ -139,7 +137,7 @@ class EnsMIFGSM:
         return self.forward(images)
 
 
-class RandomEnsModels(torch.nn.Module):
+class RandomEnsModel(torch.nn.Module):
     def __init__(self, models_list, ens_num=1):
         super().__init__()
         self.models = torch.nn.ModuleList(models_list)
@@ -174,7 +172,7 @@ class LGVAttack(TransferAttackBase):
         for model in collect_models:
             model.eval().requires_grad_(False)
 
-        random_ens_model = RandomEnsModels(collect_models, ens_num=1)
+        random_ens_model = RandomEnsModel(collect_models, ens_num=1)
 
         eps = 8 / 255
         attack = EnsMIFGSM(

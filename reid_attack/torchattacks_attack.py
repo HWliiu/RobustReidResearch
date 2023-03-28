@@ -34,13 +34,13 @@ class TransferAttack(TransferAttackBase):
 
         eps = 8 / 255
         # attack = FGSM(agent_model, eps=eps)
-        # attack = BIM(agent_model, eps=eps, alpha=2 / 255, steps=10)
-        # attack = TIFGSM(agent_model, eps=eps, alpha=2 / 255, steps=10, decay=1)
-        # attack = MIFGSM(agent_model, eps=eps, alpha=2 / 255, steps=10, decay=1)
-        # attack = DIFGSM(agent_model, eps=eps, alpha=2 / 255, steps=10, decay=1)
-        # attack = NIFGSM(agent_model, eps=eps, alpha=2 / 255, steps=10, decay=1)
-        # attack = SINIFGSM(agent_model, eps=eps, alpha=2 / 255, steps=10, decay=1)
-        attack = VMIFGSM(agent_model, eps=eps, alpha=2 / 255, steps=10, decay=1)
+        # attack = BIM(agent_model, eps=eps, alpha=1 / 255, steps=50)
+        attack = TIFGSM(agent_model, eps=eps, alpha=1 / 255, steps=50, decay=1)
+        # attack = MIFGSM(agent_model, eps=eps, alpha=1 / 255, steps=50, decay=1)
+        # attack = DIFGSM(agent_model, eps=eps, alpha=1 / 255, steps=50, decay=1)
+        # attack = NIFGSM(agent_model, eps=eps, alpha=1 / 255, steps=50, decay=1)
+        # attack = SINIFGSM(agent_model, eps=eps, alpha=1 / 255, steps=50, decay=1)
+        # attack = VMIFGSM(agent_model, eps=eps, alpha=1 / 255, steps=50, decay=1)
 
         all_adv_imgs, all_pids, all_camids = [], [], []
         q_dataloader = data.DataLoader(q_dataset, batch_size=32, num_workers=8)
