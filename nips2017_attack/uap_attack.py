@@ -44,7 +44,7 @@ class TIMUAP:
         diversity_prob=0.5,
     ):
         self.attacked_model = attacked_model
-        self.agent_model.eval()
+        self.attacked_model.eval()
         self.eps = eps
         self.epoch = epoch
         self.decay = decay
@@ -118,11 +118,257 @@ class TIMUAP:
         return uap
 
 
+class DIMUAP:
+    def __init__(
+        self,
+        attacked_model,
+        epoch=10,
+        eps=8 / 255,
+        alpha=1 / 255,
+        decay=1.0,
+        resize_rate=0.9,
+        diversity_prob=0.5,
+    ):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.epoch = epoch
+        self.decay = decay
+        self.alpha = alpha
+        self.resize_rate = resize_rate
+        self.diversity_prob = diversity_prob
+
+        self.device = next(attacked_model.parameters()).device
+
+    def input_diversity(self, x):
+        img_size = x.shape[-1]
+        img_resize = int(img_size * self.resize_rate)
+
+        if self.resize_rate < 1:
+            img_size = img_resize
+            img_resize = x.shape[-1]
+
+        rnd = torch.randint(
+            low=img_size, high=img_resize, size=(1,), dtype=torch.int32
+        ).item()
+        rescaled = F.interpolate(
+            x, size=[rnd, rnd], mode="bilinear", align_corners=False
+        )
+        h_rem = w_rem = img_resize - rnd
+        pad_top = torch.randint(low=0, high=h_rem, size=(1,), dtype=torch.int32).item()
+        pad_bottom = h_rem - pad_top
+        pad_left = torch.randint(low=0, high=w_rem, size=(1,), dtype=torch.int32).item()
+        pad_right = w_rem - pad_left
+
+        padded = F.pad(
+            rescaled,
+            [pad_left, pad_right, pad_top, pad_bottom],
+            value=0,
+        )
+
+        return padded if torch.rand(1) < self.diversity_prob else x
+
+    def __call__(self, t_dataset):
+        uap = torch.zeros((1, 3, *t_dataset[0][0].shape[-2:]), device=self.device)
+        momentum = torch.zeros_like(uap)
+
+        criterion = torch.nn.CrossEntropyLoss()
+        t_dataloader = data.DataLoader(t_dataset, batch_size=32, shuffle=True)
+        for e in range(1, self.epoch + 1):
+            for imgs, lbls in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
+            ):
+                imgs = imgs.to(self.device)
+                lbls = lbls.to(self.device)
+
+                uap.requires_grad_(True)
+                adv_imgs = torch.clamp(imgs + uap, 0, 1)
+                logits = self.attacked_model(self.input_diversity(adv_imgs))
+
+                loss = criterion(logits, lbls)
+
+                grad = torch.autograd.grad(loss, uap)[0]
+
+                grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+                grad = grad + momentum * self.decay
+                momentum = grad
+
+                uap = uap.detach() + self.alpha * grad.sign()
+                uap.clamp_(-self.eps, self.eps)
+
+        return uap
+
+
+class MIUAP:
+    def __init__(self, attacked_model, epoch=10, eps=8 / 255, alpha=1 / 255, decay=1.0):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.epoch = epoch
+        self.decay = decay
+        self.alpha = alpha
+
+        self.device = next(attacked_model.parameters()).device
+
+    def __call__(self, t_dataset):
+        uap = torch.zeros((1, 3, *t_dataset[0][0].shape[-2:]), device=self.device)
+        momentum = torch.zeros_like(uap)
+
+        criterion = torch.nn.CrossEntropyLoss()
+        t_dataloader = data.DataLoader(t_dataset, batch_size=32, shuffle=True)
+        for e in range(1, self.epoch + 1):
+            for imgs, lbls in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
+            ):
+                imgs = imgs.to(self.device)
+                lbls = lbls.to(self.device)
+
+                uap.requires_grad_(True)
+                adv_imgs = torch.clamp(imgs + uap, 0, 1)
+                logits = self.attacked_model(adv_imgs)
+
+                loss = criterion(logits, lbls)
+
+                grad = torch.autograd.grad(loss, uap)[0]
+
+                grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+                grad = grad + momentum * self.decay
+                momentum = grad
+
+                uap = uap.detach() + self.alpha * grad.sign()
+                uap.clamp_(-self.eps, self.eps)
+
+        return uap
+
+
+class CosineMIUAP:
+    def __init__(self, attacked_model, epoch=10, eps=8 / 255, alpha=1 / 255, decay=1.0):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.epoch = epoch
+        self.decay = decay
+        self.alpha = alpha
+
+        self.device = next(attacked_model.parameters()).device
+
+    def __call__(self, t_dataset):
+        uap = torch.zeros((1, 3, *t_dataset[0][0].shape[-2:]), device=self.device)
+        uap.uniform_(-self.eps, self.eps)
+        momentum = torch.zeros_like(uap)
+
+        criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+        t_dataloader = data.DataLoader(t_dataset, batch_size=32, shuffle=True)
+        for e in range(1, self.epoch + 1):
+            for imgs, lbls in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
+            ):
+                imgs = imgs.to(self.device)
+                lbls = lbls.to(self.device)
+
+                uap.requires_grad_(True)
+                adv_imgs = torch.clamp(imgs + uap, 0, 1)
+                adv_logits = self.attacked_model(adv_imgs)
+                logits = self.attacked_model(imgs)
+
+                loss = criterion(adv_logits, logits)
+
+                grad = torch.autograd.grad(loss, uap)[0]
+
+                grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+                grad = grad + momentum * self.decay
+                momentum = grad
+
+                uap = uap.detach() + self.alpha * grad.sign()
+                uap.clamp_(-self.eps, self.eps)
+
+        return uap
+
+
+class BIMUAP:
+    def __init__(self, attacked_model, epoch=10, eps=8 / 255, alpha=1 / 255):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.epoch = epoch
+        self.alpha = alpha
+
+        self.device = next(attacked_model.parameters()).device
+
+    def __call__(self, t_dataset):
+        uap = torch.zeros((1, 3, *t_dataset[0][0].shape[-2:]), device=self.device)
+
+        criterion = torch.nn.CrossEntropyLoss()
+        t_dataloader = data.DataLoader(t_dataset, batch_size=32, shuffle=True)
+        for e in range(1, self.epoch + 1):
+            for imgs, lbls in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
+            ):
+                imgs = imgs.to(self.device)
+                lbls = lbls.to(self.device)
+
+                uap.requires_grad_(True)
+                adv_imgs = torch.clamp(imgs + uap, 0, 1)
+                logits = self.attacked_model(adv_imgs)
+
+                loss = criterion(logits, lbls)
+
+                grad = torch.autograd.grad(loss, uap)[0]
+
+                uap = uap.detach() + self.alpha * grad.sign()
+                uap.clamp_(-self.eps, self.eps)
+
+        return uap
+
+
+class OptimUAP:
+    def __init__(self, attacked_model, epoch=10, eps=8 / 255, lr=1 / 255):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.epoch = epoch
+        self.lr = lr
+
+        self.device = next(attacked_model.parameters()).device
+
+    def __call__(self, t_dataset):
+        w = torch.nn.Parameter(
+            torch.randn((1, 3, *t_dataset[0][0].shape[-2:]), device=self.device)
+        )
+        optim = torch.optim.Adam([w], lr=self.lr)
+
+        criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=-torch.ones(1, device=self.device)
+        )
+        t_dataloader = data.DataLoader(t_dataset, batch_size=32, shuffle=True)
+        for e in range(1, self.epoch + 1):
+            for imgs, lbls in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
+            ):
+                imgs = imgs.to(self.device)
+                lbls = lbls.to(self.device)
+
+                uap = torch.tanh(w) * self.eps
+                adv_imgs = torch.clamp(imgs + uap, 0, 1)
+                adv_logits = self.attacked_model(adv_imgs)
+                logits = self.attacked_model(imgs)
+
+                loss = criterion(adv_logits, logits)
+
+                optim.zero_grad(True)
+                loss.backward()
+                optim.step()
+
+        return torch.clamp(w.detach(), -self.eps, self.eps)
+
+
 class UAPAttack(TransferAttackBase):
     def generate_adv(self, test_dataset, agent_model):
         agent_model.eval().requires_grad_(False)
 
-        attack = TIMUAP(agent_model)
+        attack = MIUAP(agent_model)
 
         all_adv_imgs, all_lbls = [], []
 
@@ -146,7 +392,7 @@ def main():
 
     set_seed(42)
 
-    UAPAttack().run()
+    UAPAttack("resnet50", ("resnet50",)).run()
 
 
 if __name__ == "__main__":

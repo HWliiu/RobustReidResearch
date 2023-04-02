@@ -151,11 +151,7 @@ class MGAATIM:
             )
             meta_test_feats = all_feats[meta_test_idx]
 
-            loss = criterion(
-                meta_test_adv_feats,
-                meta_test_feats,
-                torch.ones(1, device=meta_test_adv_feats.device),
-            )
+            loss = criterion(meta_test_adv_feats, meta_test_feats)
 
             grad = torch.autograd.grad(
                 loss, meta_test_adv_imgs, retain_graph=False, create_graph=False
@@ -164,6 +160,116 @@ class MGAATIM:
             grad = K.filters.gaussian_blur2d(
                 grad, kernel_size=self.len_kernel, sigma=self.nsig
             )
+            grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+            grad = grad + momentum * self.decay
+            momentum = grad
+
+            adv_images = adv_images.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)
+            adv_images = torch.clamp(images + delta, min=0, max=1).detach()
+
+        return adv_images
+
+    def __call__(self, images):
+        return self.forward(images)
+
+
+class MGAAMI:
+    def __init__(
+        self,
+        attacked_models,
+        eps=8 / 255,
+        alpha=2 / 255,
+        meta_test_step=10,
+        meta_train_step=8,
+        decay=1.0,
+        random_start=True,
+    ):
+        self.attacked_models = attacked_models
+        for model in self.attacked_models:
+            model.eval()
+        self.eps = eps
+        self.meta_test_step = meta_test_step
+        self.meta_train_step = meta_train_step
+        self.decay = decay
+        self.alpha = alpha
+        self.random_start = random_start
+
+        self.device = next(attacked_models[0].parameters()).device
+
+    def forward(self, images):
+        images = images.detach().to(self.device)
+
+        criterion = criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+
+        momentum = torch.zeros_like(images).detach().to(self.device)
+
+        adv_images = images.clone().detach()
+        if self.random_start:
+            # Starting at a uniformly random point
+            adv_images = adv_images + torch.empty_like(adv_images).uniform_(
+                -self.eps, self.eps
+            )
+            adv_images = torch.clamp(adv_images, min=0, max=1).detach()
+
+        all_feats = [model(images) for model in self.attacked_models]
+        for _ in range(self.meta_test_step):
+            rand_idx = torch.randperm(len(self.attacked_models))
+            meta_train_idx = rand_idx[:-1]
+            meta_test_idx = rand_idx[-1]
+
+            meta_train_models = [self.attacked_models[i] for i in meta_train_idx]
+            meta_test_model = self.attacked_models[meta_test_idx]
+
+            # meta train
+            meta_train_adv_imgs = adv_images.clone()
+            for _ in range(self.meta_train_step):
+                meta_train_adv_imgs.requires_grad_(True)
+                meta_train_adv_feats = [
+                    model(meta_train_adv_imgs) for model in meta_train_models
+                ]
+
+                meta_train_feats = [all_feats[i] for i in meta_train_idx]
+
+                loss = sum(
+                    [
+                        criterion(adv_feats, feats)
+                        for adv_feats, feats in zip(
+                            meta_train_adv_feats, meta_train_feats
+                        )
+                    ]
+                ) / len(meta_train_idx)
+
+                grad = torch.autograd.grad(
+                    loss, meta_train_adv_imgs, retain_graph=False, create_graph=False
+                )[0]
+
+                grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+                grad = grad + momentum * self.decay
+                momentum = grad
+
+                meta_train_adv_imgs = (
+                    meta_train_adv_imgs.detach() + self.alpha * grad.sign()
+                )
+                delta = torch.clamp(
+                    meta_train_adv_imgs - images, min=-self.eps, max=self.eps
+                )
+                meta_train_adv_imgs = torch.clamp(images + delta, min=0, max=1).detach()
+
+            # 元测试
+            meta_test_adv_imgs = meta_train_adv_imgs.clone()
+            meta_test_adv_imgs.requires_grad_(True)
+            meta_test_adv_feats = meta_test_model(meta_test_adv_imgs)
+            meta_test_feats = all_feats[meta_test_idx]
+
+            loss = criterion(meta_test_adv_feats, meta_test_feats)
+
+            grad = torch.autograd.grad(
+                loss, meta_test_adv_imgs, retain_graph=False, create_graph=False
+            )[0]
+
             grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
             grad = grad + momentum * self.decay
             momentum = grad

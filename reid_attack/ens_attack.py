@@ -97,7 +97,8 @@ class EnsTIM:
             adv_images.requires_grad = True
 
             all_adv_feats = [
-                model(self.input_diversity(adv_images)) for model in self.attacked_models
+                model(self.input_diversity(adv_images))
+                for model in self.attacked_models
             ]
 
             # Calculate loss
@@ -131,7 +132,78 @@ class EnsTIM:
         return self.forward(images)
 
 
-class EnsTIMAttack(EnsTransferAttackBase):
+class EnsMI:
+    def __init__(
+        self,
+        attacked_models,
+        eps=8 / 255,
+        alpha=1 / 255,
+        steps=50,
+        decay=1.0,
+        random_start=True,
+    ):
+        self.attacked_models = attacked_models
+        for model in self.attacked_models:
+            model.eval()
+        self.eps = eps
+        self.steps = steps
+        self.decay = decay
+        self.alpha = alpha
+        self.random_start = random_start
+
+        self.device = next(attacked_models[0].parameters()).device
+
+    def forward(self, images):
+        images = images.detach().to(self.device)
+
+        criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+
+        momentum = torch.zeros_like(images).detach().to(self.device)
+
+        adv_images = images.clone().detach()
+        if self.random_start:
+            # Starting at a uniformly random point
+            adv_images = adv_images + torch.empty_like(adv_images).uniform_(
+                -self.eps, self.eps
+            )
+            adv_images = torch.clamp(adv_images, min=0, max=1).detach()
+
+        all_feats = [model(images) for model in self.attacked_models]
+        for _ in range(self.steps):
+            adv_images.requires_grad = True
+
+            all_adv_feats = [model(adv_images) for model in self.attacked_models]
+
+            # Calculate loss
+            loss = sum(
+                [
+                    criterion(adv_feats, feats)
+                    for adv_feats, feats in zip(all_adv_feats, all_feats)
+                ]
+            ) / len(self.attacked_models)
+
+            # Update adversarial images
+            grad = torch.autograd.grad(
+                loss, adv_images, retain_graph=False, create_graph=False
+            )[0]
+
+            grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+            grad = grad + momentum * self.decay
+            momentum = grad
+
+            adv_images = adv_images.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)
+            adv_images = torch.clamp(images + delta, min=0, max=1).detach()
+
+        return adv_images
+
+    def __call__(self, images):
+        return self.forward(images)
+
+
+class EnsAttack(EnsTransferAttackBase):
     def generate_adv(self, q_dataset, agent_models):
         for model in self.agent_models:
             model.eval().requires_grad_(False)
@@ -159,7 +231,7 @@ def main():
 
     set_seed(42)
 
-    EnsTIMAttack().run()
+    EnsAttack().run()
 
 
 if __name__ == "__main__":

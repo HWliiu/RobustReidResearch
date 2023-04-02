@@ -111,13 +111,59 @@ class TIMUAP:
         return uap
 
 
+class MIUAP:
+    def __init__(self, attacked_model, epoch=1, eps=8 / 255, alpha=1 / 255, decay=1.0):
+        self.attacked_model = attacked_model
+        self.attacked_model.eval()
+        self.eps = eps
+        self.epoch = epoch
+        self.decay = decay
+        self.alpha = alpha
+
+        self.device = next(attacked_model.parameters()).device
+
+    def __call__(self, t_dataset):
+        uap = torch.zeros(
+            (1, 3, *t_dataset[0][0].shape[-2:]), device=self.device
+        ).uniform_(-1e-3, 1e-3)
+        momentum = torch.zeros_like(uap)
+
+        criterion = partial(
+            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+        )
+        t_dataloader = data.DataLoader(t_dataset, batch_size=32)
+        for e in range(1, self.epoch + 1):
+            for imgs, _, _ in tqdm(
+                t_dataloader, desc=f"Train UAP [{e}/{self.epoch}]", leave=False
+            ):
+                imgs = imgs.to(self.device)
+
+                feats = self.attacked_model(imgs)
+                uap.requires_grad_(True)
+                adv_imgs = torch.clamp(imgs + uap, 0, 1)
+                adv_feats = self.attacked_model(adv_imgs)
+
+                loss = criterion(adv_feats, feats)
+
+                grad = torch.autograd.grad(loss, uap)[0]
+
+                grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+                grad = grad + momentum * self.decay
+                momentum = grad
+
+                uap = uap.detach() + self.alpha * grad.sign()
+                uap.clamp_(-self.eps, self.eps)
+
+        return uap
+
+
 class OPTIMUAP:
     def __init__(
         self,
         attacked_model,
         epoch=20,
         eps=8 / 255,
-        lr=0.01,
+        lr=1e-4,
         len_kernel=15,
         nsig=3,
         resize_rate=0.9,
@@ -168,21 +214,22 @@ class OPTIMUAP:
         return padded if torch.rand(1) < self.diversity_prob else x
 
     def convert2uap(self, w):
-        return torch.tanh(w) * self.eps
+        # return torch.tanh(w) * self.eps
+        return torch.clamp(w, -self.eps, self.eps)
 
     def __call__(self, t_dataset):
         w = torch.nn.Parameter(
             torch.randn((1, 3, *t_dataset[0][0].shape[-2:]), device=self.device)
         )
-        w.register_hook(
-            lambda grad: K.filters.gaussian_blur2d(
-                grad, kernel_size=self.len_kernel, sigma=self.nsig
-            )
-        )
+        # w.register_hook(
+        #     lambda grad: K.filters.gaussian_blur2d(
+        #         grad, kernel_size=self.len_kernel, sigma=self.nsig
+        #     )
+        # )
         optim = torch.optim.Adam([w], lr=self.lr)
 
         criterion = partial(
-            torch.nn.CosineEmbeddingLoss(), target=torch.ones(1, device=self.device)
+            torch.nn.CosineEmbeddingLoss(), target=-torch.ones(1, device=self.device)
         )
         t_dataloader = data.DataLoader(t_dataset, batch_size=32)
         for e in range(1, self.epoch + 1):
@@ -193,9 +240,10 @@ class OPTIMUAP:
 
                 feats = self.attacked_model(imgs)
                 adv_imgs = torch.clamp(imgs + self.convert2uap(w), 0, 1)
-                adv_feats = self.attacked_model(self.input_diversity(adv_imgs))
+                # adv_feats = self.attacked_model(self.input_diversity(adv_imgs))
+                adv_feats = self.attacked_model(adv_imgs)
 
-                loss = 1.0 - criterion(adv_feats, feats)
+                loss = criterion(adv_feats, feats)
 
                 optim.zero_grad(True)
                 loss.backward()
@@ -208,7 +256,7 @@ class UAPAttack(TransferAttackBase):
     def generate_adv(self, q_dataset, agent_model):
         agent_model.eval().requires_grad_(False)
 
-        attack = TIMUAP(agent_model)
+        attack = MIUAP(agent_model)
         # attack = OPTIMUAP(agent_model)
 
         all_adv_imgs, all_pids, all_camids = [], [], []
@@ -236,7 +284,7 @@ def main():
 
     set_seed(42)
 
-    UAPAttack().run()
+    UAPAttack("bagtricks_R50_ibn_fastreid", ("bagtricks_R50_ibn_fastreid",)).run()
 
 
 if __name__ == "__main__":
