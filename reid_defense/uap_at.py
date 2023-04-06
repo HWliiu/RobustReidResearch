@@ -13,40 +13,37 @@ import kornia as K
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, reduce, repeat
-from prettytable import PrettyTable
 from pytorch_metric_learning.losses import TripletMarginLoss
 from pytorch_metric_learning.miners import BatchEasyHardMiner
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset
 from torchvision.utils import save_image
 from tqdm.auto import tqdm
-
 from pytorch_reid_models.reid_models.data import (
-    build_test_dataloaders,
+    build_test_datasets,
     build_train_dataloader,
     build_train_dataset,
 )
-from pytorch_reid_models.reid_models.evaluate import Estimator
 from pytorch_reid_models.reid_models.modeling import _build_reid_model
 from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
+from reid_defense.eval_attack import test
 
 
 class TIMUAP:
     def __init__(
         self,
-        train_dataset_names,
-        train_num=128,
+        train_dataset_name,
+        train_num=1024,
         train_epoch=1,
         eps=4 / 255,
-        alpha=0.01,
+        alpha=0.5 / 255,
         decay=1.0,
         len_kernel=7,
         nsig=1.5,
         resize_rate=0.9,
         diversity_prob=0.5,
     ):
-        self.train_dataset_names = train_dataset_names
+        self.train_dataset_name = train_dataset_name
         self.train_num = train_num
         self.train_epoch = train_epoch
 
@@ -58,14 +55,14 @@ class TIMUAP:
         self.len_kernel = (len_kernel, len_kernel)
         self.nsig = (nsig, nsig)
 
-        self.t_dataset = build_train_dataset(train_dataset_names)
+        self.t_dataset = build_train_dataset([train_dataset_name])
 
     def get_train_dataloader(self):
         sub_t_dataset = Subset(
             self.t_dataset,
             indices=random.sample(range(len(self.t_dataset)), k=self.train_num),
         )
-        return DataLoader(sub_t_dataset, batch_size=1, shuffle=True)
+        return DataLoader(sub_t_dataset, batch_size=32, shuffle=True)
 
     def input_diversity(self, x):
         img_size = x.shape[-1]
@@ -104,7 +101,7 @@ class TIMUAP:
 
         uap = torch.zeros(
             (1, 3, *self.t_dataset[0][0].shape[-2:]), device=device
-        ).uniform_(-1e-3, 1e-3)
+        ).uniform_(-1e-2, 1e-2)
         momentum = torch.zeros_like(uap)
 
         criterion = partial(
@@ -118,18 +115,20 @@ class TIMUAP:
             ):
                 imgs = imgs.to(device)
 
-                feats = model(imgs)
+                with torch.no_grad():
+                    feats = model(imgs)
                 uap.requires_grad_(True)
                 adv_imgs = torch.clamp(imgs + uap, 0, 1)
-                adv_feats = model(self.input_diversity(adv_imgs))
+                # adv_feats = model(self.input_diversity(adv_imgs))
+                adv_feats = model(adv_imgs)
 
                 loss = criterion(adv_feats, feats)
 
                 grad = torch.autograd.grad(loss, uap)[0]
 
-                grad = K.filters.gaussian_blur2d(
-                    grad, kernel_size=self.len_kernel, sigma=self.nsig
-                )
+                # grad = K.filters.gaussian_blur2d(
+                #     grad, kernel_size=self.len_kernel, sigma=self.nsig
+                # )
                 grad = grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
                 grad = grad + momentum * self.decay
                 momentum = grad
@@ -153,7 +152,8 @@ def adv_train(
     max_epoch,
     epoch,
     uap_attacker,
-    update_uap_freq=1,
+    update_uap_freq=10,
+    apply_uap_rate=0.9,
 ):
     model.train()
     bar = tqdm(
@@ -173,7 +173,8 @@ def adv_train(
 
         imgs, pids, camids = imgs.cuda(), pids.cuda(), camids.cuda()
 
-        adv_imgs = torch.clamp(imgs + uap, 0, 1)
+        masks = torch.bernoulli(torch.ones_like(pids) * apply_uap_rate)
+        adv_imgs = torch.clamp(imgs + uap * masks[:, None, None, None], 0, 1)
         logits, feats = model(adv_imgs)
 
         pairs = miner(feats, pids)
@@ -199,13 +200,14 @@ def main():
     seed = 42
     set_seed(seed)
 
-    accelerator = accelerate.Accelerator(mixed_precision="fp16")
+    accelerator = accelerate.Accelerator(mixed_precision="no")
 
-    test_dataset_names = ["market1501"]
-    test_loaders = build_test_dataloaders(dataset_names=test_dataset_names)
-    train_dataset_names = ["market1501"]
+    dataset_name = "dukemtmcreid"
+    test_dataset = build_test_datasets(dataset_names=[dataset_name], query_num=500)[
+        dataset_name
+    ]
     train_loader = build_train_dataloader(
-        dataset_names=train_dataset_names,
+        dataset_names=[dataset_name],
         transforms=["randomflip", "randomcrop", "rea"],
         batch_size=64,
         sampler="pk",
@@ -214,17 +216,14 @@ def main():
 
     model_name = "bagtricks_R50_fastreid"
     num_classes_dict = {"dukemtmcreid": 702, "market1501": 751, "msmt17": 1041}
-    num_classes = sum([num_classes_dict[name] for name in train_dataset_names])
-    # TODO: Make sure load pretrained model
+    num_classes = num_classes_dict[dataset_name]
+    # Make sure load pretrained model
     os.environ["pretrain"] = "1"
     model = _build_reid_model(
         model_name,
         num_classes=num_classes,
-    )
+    ).cuda()
     model = accelerator.prepare(model)
-
-    save_dir = Path(f"logs/uap_at/{model_name}/{'_'.join(train_dataset_names)}")
-    save_dir.mkdir(parents=True, exist_ok=True)
 
     max_epoch = 60
     optimizer = torch.optim.Adam(model.parameters(), lr=3.5e-4, weight_decay=5e-4)
@@ -234,7 +233,10 @@ def main():
     criterion_t = TripletMarginLoss(margin=0.3)
     criterion_x = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-    uap_attacker = TIMUAP(train_dataset_names)
+    uap_attacker = TIMUAP(dataset_name)
+
+    save_dir = Path(f"logs/uap_at")
+    save_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, max_epoch + 1):
         adv_train(
@@ -255,24 +257,10 @@ def main():
         if epoch % 10 == 0:
             torch.save(
                 model.state_dict(),
-                save_dir / f"{'_'.join(train_dataset_names)}-{model_name}.pth",
+                save_dir / f"{dataset_name}-{model_name}.pth",
             )
-            results = PrettyTable(
-                field_names=[f"epoch {epoch:0>2}", "top1", "top5", "mAP", "mINP"]
-            )
-            for name, loader in test_loaders.items():
-                cmc, mAP, mINP = Estimator(model, loader[1])(loader[0])
-                results.add_row(
-                    [
-                        name,
-                        f"{cmc[0]:.3f}",
-                        f"{cmc[4]:.3f}",
-                        f"{mAP:.3f}",
-                        f"{mINP:.3f}",
-                    ]
-                )
-
-            logger.info("\n" + str(results))
+            results = test(test_dataset, model)
+            logger.info(f"Epoch {epoch:0>2} evaluate results:\n" + results)
 
 
 if __name__ == "__main__":

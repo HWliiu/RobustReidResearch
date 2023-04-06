@@ -163,3 +163,5 @@ logs/*
 !logs/.gitkeep
 datasets/*
 !datasets/.gitkeep
+experiment/*
+!experiment/.gitkeep

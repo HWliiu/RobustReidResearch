@@ -9,52 +9,33 @@ from pathlib import Path
 import accelerate
 import torch
 import torch.nn as nn
-from prettytable import PrettyTable
+import torch.nn.functional as F
 from pytorch_metric_learning.losses import TripletMarginLoss
-from pytorch_metric_learning.miners import BatchEasyHardMiner
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torchvision.models.feature_extraction import (
-    create_feature_extractor,
-    get_graph_node_names,
-)
+from torchvision.utils import save_image
 from tqdm.auto import tqdm
 
 from pytorch_reid_models.reid_models.data import (
-    build_test_dataloaders,
+    build_test_datasets,
     build_train_dataloader,
 )
-from pytorch_reid_models.reid_models.evaluate import Estimator
 from pytorch_reid_models.reid_models.modeling import _build_reid_model
 from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
+from reid_defense.eval_attack import test
 
 
-# TODO: Finish it
-def get_adversary(imgs, model):
-    model.eval()
-
-    model.train()
-    return
-
-
-class YOPOModelWrapper(nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        assert model.name == "bagtricks_R50_fastreid"
-
-    def __call__(self, imgs):
-        pass
-
-
-def train(
-    accelerator,
+def adv_train(
     model,
     train_loader,
     optimizer,
-    miner,
     criterion_t,
     criterion_x,
     max_epoch,
     epoch,
+    # adv parameters
+    adv_step,
+    alpha=2 / 255,
+    eps=4 / 255,
 ):
     model.train()
     bar = tqdm(
@@ -63,26 +44,41 @@ def train(
         desc=f"Epoch[{epoch}/{max_epoch}]",
         leave=False,
     )
+
     for batch_idx, (imgs, pids, camids) in enumerate(bar):
         imgs, pids, camids = imgs.cuda(), pids.cuda(), camids.cuda()
 
-        adv_imgs = get_adversary(imgs, model)
+        model.eval()
+        with torch.no_grad():
+            feats = model(imgs)
+        adv_imgs = imgs.clone() + torch.empty_like(imgs).uniform_(-1e-2, 1e-2)
+        for _ in range(adv_step):
+            adv_imgs.requires_grad_(True)
+            adv_feats = model(adv_imgs)
 
-        logits, feats = model(imgs, model)
+            loss = (F.normalize(adv_feats) * F.normalize(feats)).sum(dim=1).mean()
+            grad = torch.autograd.grad(loss, adv_imgs)[0]
 
-        pairs = miner(feats, pids)
-        loss_t = criterion_t(feats, pids, pairs)
+            # Update adversaries
+            adv_imgs = adv_imgs.detach() - alpha * grad.sign()
+            delta = torch.clamp(adv_imgs - imgs, min=-eps, max=eps)
+            adv_imgs = torch.clamp(imgs + delta, min=0, max=1).detach()
+        model.train()
+
+        logits, feats = model(adv_imgs)
+
+        loss_t = criterion_t(feats, pids)
         loss_x = criterion_x(logits, pids)
 
         loss = loss_t + loss_x
         optimizer.zero_grad(True)
         loss.backward()
-        # accelerator.backward(loss)
         optimizer.step()
 
         acc = (logits.max(1)[1] == pids).float().mean()
         bar.set_postfix_str(f"loss:{loss.item():.1f} " f"acc:{acc.item():.1f}")
         bar.update()
+
     bar.close()
 
 
@@ -93,13 +89,14 @@ def main():
     seed = 42
     set_seed(seed)
 
-    accelerator = accelerate.Accelerator(mixed_precision="fp16")
+    accelerator = accelerate.Accelerator(mixed_precision="no")
 
-    test_dataset_names = ["market1501"]
-    test_loaders = build_test_dataloaders(dataset_names=test_dataset_names)
-    train_dataset_names = ["market1501"]
+    dataset_name = "market1501"
+    test_dataset = build_test_datasets(dataset_names=[dataset_name], query_num=500)[
+        dataset_name
+    ]
     train_loader = build_train_dataloader(
-        dataset_names=train_dataset_names,
+        dataset_names=[dataset_name],
         transforms=["randomflip", "randomcrop", "rea"],
         batch_size=64,
         sampler="pk",
@@ -108,38 +105,36 @@ def main():
 
     model_name = "bagtricks_R50_fastreid"
     num_classes_dict = {"dukemtmcreid": 702, "market1501": 751, "msmt17": 1041}
-    num_classes = sum([num_classes_dict[name] for name in train_dataset_names])
-    # TODO: Make sure load pretrained model
+    num_classes = num_classes_dict[dataset_name]
+    # Make sure load pretrained model
     os.environ["pretrain"] = "1"
     model = _build_reid_model(
         model_name,
         num_classes=num_classes,
-    )
+    ).cuda()
     model = accelerator.prepare(model)
-    YOPOModelWrapper(model)
 
-    save_dir = Path(f"logs/train")
-    save_dir.mkdir(parents=True, exist_ok=True)
-
+    adv_steps = 4
     max_epoch = 60
     optimizer = torch.optim.Adam(model.parameters(), lr=3.5e-4, weight_decay=5e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=max_epoch, eta_min=7e-7)
 
-    miner = BatchEasyHardMiner()
     criterion_t = TripletMarginLoss(margin=0.3)
     criterion_x = nn.CrossEntropyLoss(label_smoothing=0.1)
 
+    save_dir = Path(f"logs/pgd_at_cos")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
     for epoch in range(1, max_epoch + 1):
-        train(
-            accelerator,
+        adv_train(
             model,
             train_loader,
             optimizer,
-            miner,
             criterion_t,
             criterion_x,
             max_epoch,
             epoch,
+            adv_steps,
         )
 
         scheduler.step()
@@ -147,24 +142,10 @@ def main():
         if epoch % 10 == 0:
             torch.save(
                 model.state_dict(),
-                save_dir / f"{'_'.join(train_dataset_names)}-{model_name}.pth",
+                save_dir / f"{dataset_name}-{model_name}.pth",
             )
-            results = PrettyTable(
-                field_names=[f"epoch {epoch:0>2}", "top1", "top5", "mAP", "mINP"]
-            )
-            for name, loader in test_loaders.items():
-                cmc, mAP, mINP = Estimator(model, loader[1])(loader[0])
-                results.add_row(
-                    [
-                        name,
-                        f"{cmc[0]:.3f}",
-                        f"{cmc[4]:.3f}",
-                        f"{mAP:.3f}",
-                        f"{mINP:.3f}",
-                    ]
-                )
-
-            logger.info("\n" + str(results))
+            results = test(test_dataset, model)
+            logger.info(f"Epoch {epoch:0>2} evaluate results:\n" + results)
 
 
 if __name__ == "__main__":

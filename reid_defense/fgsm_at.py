@@ -9,7 +9,9 @@ from pathlib import Path
 import accelerate
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pytorch_metric_learning.losses import TripletMarginLoss
+from pytorch_metric_learning.miners import BatchEasyHardMiner
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchvision.utils import save_image
 from tqdm.auto import tqdm
@@ -23,6 +25,12 @@ from pytorch_reid_models.reid_models.utils import set_seed, setup_logger
 from reid_defense.eval_attack import test
 
 
+def set_bn_dropout_eval(m):
+    classname = m.__class__.__name__
+    if classname.find("BatchNorm") != -1 or classname.find("Dropout") != -1:
+        m.eval()
+
+
 def adv_train(
     model,
     train_loader,
@@ -32,8 +40,6 @@ def adv_train(
     max_epoch,
     epoch,
     # adv parameters
-    adv_step,
-    alpha=2 / 255,
     eps=4 / 255,
 ):
     model.train()
@@ -43,35 +49,39 @@ def adv_train(
         desc=f"Epoch[{epoch}/{max_epoch}]",
         leave=False,
     )
+
     for batch_idx, (imgs, pids, camids) in enumerate(bar):
         imgs, pids, camids = imgs.cuda(), pids.cuda(), camids.cuda()
 
-        adv_imgs = imgs.clone()
-        for _ in range(adv_step):
-            adv_imgs.requires_grad_(True)
-            logits, adv_feats = model(adv_imgs)
+        model.apply(set_bn_dropout_eval)
+        adv_imgs = imgs.clone() + torch.empty_like(imgs).uniform_(-1e-2, 1e-2)
+        adv_imgs.requires_grad_(True)
 
-            # Can't use miner because adversary is not compatible
-            loss_t = criterion_t(adv_feats, pids)
-            loss_x = criterion_x(logits, pids)
+        logits, feats = model(adv_imgs)
+        loss_t = criterion_t(feats, pids)
+        loss_x = criterion_x(logits, pids)
+        loss = loss_t + loss_x
 
-            loss = loss_t + loss_x
-            optimizer.zero_grad(True)
-            adv_imgs.grad = None
-            loss.backward()
-            optimizer.step()
+        grad = torch.autograd.grad(loss, adv_imgs)[0]
 
-            # Update adversaries
-            adv_imgs = adv_imgs.detach() + alpha * adv_imgs.grad.sign()
-            delta = torch.clamp(adv_imgs - imgs, min=-eps, max=eps)
-            adv_imgs = torch.clamp(imgs + delta, min=0, max=1).detach()
+        # Update adversaries
+        adv_imgs = adv_imgs.detach() + eps * grad.sign()
+        model.train()
 
-            # delete
-            adv_imgs = adv_imgs.detach()
+        logits, feats = model(adv_imgs)
+
+        loss_t = criterion_t(feats, pids)
+        loss_x = criterion_x(logits, pids)
+
+        loss = loss_t + loss_x
+        optimizer.zero_grad(True)
+        loss.backward()
+        optimizer.step()
 
         acc = (logits.max(1)[1] == pids).float().mean()
         bar.set_postfix_str(f"loss:{loss.item():.1f} " f"acc:{acc.item():.1f}")
         bar.update()
+
     bar.close()
 
 
@@ -107,16 +117,14 @@ def main():
     ).cuda()
     model = accelerator.prepare(model)
 
-    adv_steps = 4
-    max_epoch = int(60 / adv_steps)
-
+    max_epoch = 60
     optimizer = torch.optim.Adam(model.parameters(), lr=3.5e-4, weight_decay=5e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=max_epoch, eta_min=7e-7)
 
     criterion_t = TripletMarginLoss(margin=0.3)
     criterion_x = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-    save_dir = Path(f"logs/fast_at")
+    save_dir = Path(f"logs/fgsm_at")
     save_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, max_epoch + 1):
@@ -128,12 +136,11 @@ def main():
             criterion_x,
             max_epoch,
             epoch,
-            adv_steps,
         )
 
         scheduler.step()
 
-        if epoch % 3 == 0:
+        if epoch % 10 == 0:
             torch.save(
                 model.state_dict(),
                 save_dir / f"{dataset_name}-{model_name}.pth",
